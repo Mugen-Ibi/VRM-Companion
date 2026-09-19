@@ -1,12 +1,18 @@
 import { packager } from '@electron/packager';
-import { copyFile, mkdir, readdir } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 await import('./build.mjs');
 await import('./notices.mjs');
+// Public four-component Windows version is independent of npm's SemVer format.
+const { releaseVersion } = JSON.parse(await readFile('package.json', 'utf8'));
+if (typeof releaseVersion !== 'string' || !/^\d+\.\d+\.\d+\.\d+$/.test(releaseVersion))
+  throw new Error('releaseVersion must contain four numeric components.');
 const paths = await packager({
   dir: '.',
-  out: 'release',
+  out: process.env.COMPANION_PACKAGE_OUT || 'release',
   name: 'VRM-Companion',
+  appVersion: releaseVersion,
+  buildVersion: releaseVersion,
   platform: 'win32',
   arch: 'x64',
   overwrite: true,

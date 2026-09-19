@@ -1,4 +1,4 @@
-import { CATEGORIES, type State, type Plan, type Category } from '../shared/types';
+import { CATEGORIES, type State, type Plan, type Category, type Gesture } from '../shared/types';
 const api = window.companion,
   app = document.querySelector<HTMLDivElement>('#app')!;
 let state: State,
@@ -59,7 +59,9 @@ const phaseNames = {
 function rememberSettings(form: HTMLFormElement) {
   settingsDraft = new Map(
     Array.from(
-      form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input,textarea'),
+      form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+        'input,textarea,select',
+      ),
       (el) => [
         el.id || el.name,
         { value: el.value, checked: el instanceof HTMLInputElement && el.checked },
@@ -187,7 +189,9 @@ function render() {
   const form = document.querySelector<HTMLFormElement>('#settings-form');
   if (form) {
     form
-      .querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input,textarea')
+      .querySelectorAll<
+        HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+      >('input,textarea,select')
       .forEach((el) => {
         const saved = settingsDraft?.get(el.id || el.name);
         if (saved) {
@@ -202,12 +206,44 @@ function render() {
       if (!state.busy) void action(saveSettings);
     });
   }
+  document.querySelector<HTMLSelectElement>('#chat-model')?.addEventListener('change', (event) => {
+    void action(() => api.selectModel((event.target as HTMLSelectElement).value));
+  });
   restoreFocus?.();
+}
+function modelControls() {
+  if (state.settings.llmMode !== 'managed')
+    return '<span class="muted small">外部のllama-serverを使用中</span>';
+  const status = {
+    unloaded: '未読込',
+    loading: '読み込み中',
+    ready: '使用中',
+    stopping: '解放中',
+    error: '起動エラー',
+  }[state.llm.status];
+  return `<div class="model-controls"><label for="chat-model">LLM</label><select id="chat-model" ${disabled()}><option value="" disabled ${!state.settings.managedModel ? 'selected' : ''}>モデルを選択</option>${state.llm.models.map((m) => `<option value="${m.id}" ${m.id === state.settings.managedModel ? 'selected' : ''}>${esc(m.name)} · ${bytes(m.size)}</option>`).join('')}</select><span class="tag">${status}</span>${button('再読込', 'refreshModels', 'quiet small', disabled())}${button('メモリ解放', 'unloadModel', 'quiet small', state.busy || state.llm.status === 'unloaded' ? 'disabled' : '')}${state.busy ? button('停止', 'cancel', 'small danger') : ''}${state.llm.error ? `<span class="model-error" role="alert">${esc(state.llm.error)}</span>` : ''}</div>`;
+}
+function gestureControls() {
+  return `<div class="actions">${(['wave', 'nod', 'bow', 'stretch'] as Gesture[]).map((name, i) => button(['手を振る', 'うなずく', 'おじぎ', '伸び'][i], 'gesture', 'small quiet', `data-id="${name}" ${!state.settings.avatarId || state.settings.motionLevel === 'off' ? 'disabled' : ''}`)).join('')}</div>`;
+}
+function selectSetting(name: string, label: string, options: [string, string][]) {
+  return `<div><label for="${name}">${label}</label><select id="${name}" name="${name}">${options.map(([value, title]) => `<option value="${value}" ${(state.settings as unknown as Record<string, unknown>)[name] === value ? 'selected' : ''}>${title}</option>`).join('')}</select></div>`;
+}
+function localSettings() {
+  const s = state.settings;
+  return `<div class="card"><div class="eyebrow">Local intelligence</div><h3>ローカルLLM</h3><div class="form-grid">${selectSetting(
+    'llmMode',
+    'LLMの使い方',
+    [
+      ['external', '起動済みサーバーに接続'],
+      ['managed', 'フォルダーから選択（アプリが起動・停止）'],
+    ],
+  )}<div><label for="idleUnloadMinutes">未使用時にメモリを解放（分・0で無効）</label><input id="idleUnloadMinutes" name="idleUnloadMinutes" type="number" min="0" max="120" value="${s.idleUnloadMinutes}"></div></div><p class="muted">フォルダーから選択すると、会話画面でGGUFを切り替えられます。同時に読み込むのは1モデルです。解放後は次の送信時に読み直します。</p><p class="path">GGUF: ${esc(s.modelDirectory || '未選択')}</p><div class="actions">${button('GGUFフォルダーを選択', 'chooseModelDirectory', '', `type="button" ${disabled()}`)}${button('一覧を再読込', 'refreshModels', 'quiet', `type="button" ${disabled()}`)}</div><p class="path">llama-server: ${esc(s.serverPath || '未選択')}</p><div class="actions">${button('llama-server.exeを選択', 'chooseLlamaServer', '', `type="button" ${disabled()}`)}</div><p class="muted">GGUFは直下のみ検索します。新しいllama.cppのCUDA版を展開したフォルダーの実行ファイルを指定してください。モデル・実行環境のダウンロードは行いません。</p><div class="form-grid"><div><label for="context">コンテキスト上限（管理モードにも適用）</label><input id="context" name="context" type="number" min="1024" max="131072" value="${s.context}"></div><div><label for="outputTokens">応答トークン上限</label><input id="outputTokens" name="outputTokens" type="number" min="64" max="4096" value="${s.outputTokens}"></div></div><p class="muted">メモリを抑えるには4,096から始め、小さいGGUFを選んでください。大きいモデルはCPUにも配置され、応答が遅くなる場合があります。</p><details ${s.llmMode === 'external' ? 'open' : ''}><summary>外部サーバーの接続設定</summary><div class="form-grid"><div><label for="endpoint">接続先</label><input id="endpoint" name="endpoint" value="${esc(s.endpoint)}" required></div><div><label for="model">モデルID（空欄なら接続時に取得）</label><input id="model" name="model" value="${esc(s.model)}"></div><div class="wide"><label for="api-key">APIキー（任意）</label><input id="api-key" type="password" autocomplete="off" placeholder="${state.hasApiKey ? '保存済み。変更するときだけ入力' : '未設定'}"><label class="check"><input id="clear-key" type="checkbox">保存済みキーを削除</label></div></div><p class="muted">外部サーバーの起動設定と停止はユーザーが管理します。</p></details><div class="actions">${button('設定を保存', 'saveSettings', 'primary', `type="button" ${disabled()}`)}${button('接続を確認', 'connect', '', `type="button" ${disabled()}`)}${state.busy ? button('停止', 'cancel', 'danger', 'type="button"') : ''}</div></div>`;
 }
 function chat(avatarName?: string) {
   const c = active(),
     root = state.roots.find((r) => r.id === c.rootId && !r.revoked);
-  return `<div class="chat-layout"><div class="chat-main"><div class="conversation-toolbar">${button('この会話を削除', 'deleteConversation', 'quiet small danger', `data-id="${c.id}" ${disabled()}`)}</div><div class="chat-scroll">${c.messages.length ? c.messages.map((m) => `<article class="message ${m.role} ${m.status === 'error' ? 'error' : ''}" data-message="${m.id}"><div class="author">${m.role === 'user' ? 'YOU' : esc(state.settings.persona)}</div><div class="message-text">${esc(m.content || '…')}</div>${m.status === 'error' ? button('前の入力を再入力', 'retryInput', 'quiet small', `data-id="${m.id}" ${disabled()}`) : ''}</article>`).join('') : `<div class="welcome"><span class="welcome-mark">✳</span><div class="eyebrow">A little company, on your desktop</div><h2>いつものデスクに、<br>もうひとつの居場所。</h2><p>好きなアバターと話したり、ファイルを整えたり。<br>まずはローカルLLMに接続して、ひとこと話しかけてみましょう。</p><div class="suggestions">${button('こんにちは', 'suggest', '', 'data-text="こんにちは"')}${button('今日の作業を一緒に考えて', 'suggest', '', 'data-text="今日の作業を一緒に考えて"')}</div></div>`}${state.pending?.conversationId === c.id ? `<div class="notice">${esc(state.pending.reason)}<div class="actions">${button('対象フォルダを選ぶ', 'selectRoot', 'small', disabled())}${button('種類別整理の案を作る', 'resolve', 'primary small', disabled())}${button('キャンセル', 'dismiss', 'quiet small')}</div></div>` : ''}${conversationPlans(c.id)}</div><div class="composer"><textarea id="message-input" aria-label="メッセージ" placeholder="メッセージを入力…" maxlength="6000">${esc(draft)}</textarea><div class="composer-bottom"><span>Enterで送信 · Shift+Enterで改行</span>${state.busy ? button('停止', 'cancel', 'danger') : button('送信 ↗', 'send', 'primary')}</div></div></div><aside><div class="aside-card"><div class="eyebrow">Your companion</div><div class="avatar-empty"><div class="orb"></div></div><h3>${esc(avatarName || 'あなたのVRMを選ぶ')}</h3><p>${avatarName ? 'モデルはデスクトップに表示されます。位置はドラッグで調整できます。' : 'モデルの探索・入手はユーザー自身で。対応するVRM 0.x / 1.0を読み込めます。'}</p>${button(avatarName ? 'デスクトップに表示' : 'VRMをインポート', avatarName ? 'showAvatar' : 'importAvatar', '', disabled())}</div><div class="aside-card"><div class="eyebrow">Workspace</div><h3>${root ? '整理対象を選択済み' : 'フォルダのお手伝い'}</h3><p>${esc(root?.path || '指定したフォルダの直下を種類別に。確認してから移動します。')}</p>${button('フォルダを選択', 'selectRoot', '', disabled())}${button('整理案を作る', 'propose', 'secondary-button', disabled())}</div><div class="setup-step"><b>${connected ? '●' : '○'}</b>${connected ? 'ローカルLLM接続済み' : '設定からLLMの接続を確認'}</div></aside></div>`;
+  return `<div class="chat-layout"><div class="chat-main"><div class="conversation-toolbar">${modelControls()}${button('この会話を削除', 'deleteConversation', 'quiet small danger', `data-id="${c.id}" ${disabled()}`)}</div><div class="chat-scroll">${c.messages.length ? c.messages.map((m) => `<article class="message ${m.role} ${m.status === 'error' ? 'error' : ''}" data-message="${m.id}"><div class="author">${m.role === 'user' ? 'YOU' : esc(state.settings.persona)}</div><div class="message-text">${esc(m.content || '…')}</div>${m.status === 'error' ? button('前の入力を再入力', 'retryInput', 'quiet small', `data-id="${m.id}" ${disabled()}`) : ''}</article>`).join('') : `<div class="welcome"><span class="welcome-mark">✳</span><div class="eyebrow">A little company, on your desktop</div><h2>いつものデスクに、<br>もうひとつの居場所。</h2><p>好きなアバターと話したり、ファイルを整えたり。<br>まずはローカルLLMに接続して、ひとこと話しかけてみましょう。</p><div class="suggestions">${button('こんにちは', 'suggest', '', 'data-text="こんにちは"')}${button('今日の作業を一緒に考えて', 'suggest', '', 'data-text="今日の作業を一緒に考えて"')}</div></div>`}${state.pending?.conversationId === c.id ? `<div class="notice">${esc(state.pending.reason)}<div class="actions">${button('対象フォルダを選ぶ', 'selectRoot', 'small', disabled())}${button('種類別整理の案を作る', 'resolve', 'primary small', disabled())}${button('キャンセル', 'dismiss', 'quiet small')}</div></div>` : ''}${conversationPlans(c.id)}</div><div class="composer"><textarea id="message-input" aria-label="メッセージ" placeholder="メッセージを入力…" maxlength="6000">${esc(draft)}</textarea><div class="composer-bottom"><span>Enterで送信 · Shift+Enterで改行</span>${state.busy ? button('停止', 'cancel', 'danger') : button('送信 ↗', 'send', 'primary')}</div></div></div><aside><div class="aside-card"><div class="eyebrow">Your companion</div><div class="avatar-empty"><div class="orb"></div></div><h3>${esc(avatarName || 'あなたのVRMを選ぶ')}</h3><p>${avatarName ? 'モデルはデスクトップに表示されます。位置はドラッグで調整できます。' : 'モデルの探索・入手はユーザー自身で。対応するVRM 0.x / 1.0を読み込めます。'}</p>${button(avatarName ? 'デスクトップに表示' : 'VRMをインポート', avatarName ? 'showAvatar' : 'importAvatar', '', disabled())}</div><div class="aside-card"><div class="eyebrow">Workspace</div><h3>${root ? '整理対象を選択済み' : 'フォルダのお手伝い'}</h3><p>${esc(root?.path || '指定したフォルダの直下を種類別に。確認してから移動します。')}</p>${button('フォルダを選択', 'selectRoot', '', disabled())}${button('整理案を作る', 'propose', 'secondary-button', disabled())}</div><div class="setup-step"><b>${connected ? '●' : '○'}</b>${connected ? 'ローカルLLM接続済み' : '設定からLLMの接続を確認'}</div></aside></div>`;
 }
 function organize() {
   const c = active();
@@ -241,11 +277,23 @@ function planCard(p: Plan) {
   }<div class="actions">${editable ? button('内容を検証する', 'prepare', '', `data-id="${p.id}" ${disabled()}`) : ''}${p.status === 'ready' ? button('この内容で' + (p.undoOf ? '戻す' : '整理する'), 'approve', 'primary', `data-id="${p.id}" data-rev="${p.revision}" data-hash="${p.hash}" ${disabled()}`) : ''}${['completed', 'partial', 'canceled', 'failed', 'reviewed'].includes(p.status) && !p.undoOf ? button('復元案を確認', 'undo', '', `data-id="${p.id}" ${disabled()}`) : ''}${p.status === 'recovery' ? button('実ファイルを手動確認して照合を終了', 'acknowledgeRecovery', 'quiet small', `data-id="${p.id}" data-rev="${p.revision}" ${disabled()}`) : ''}${!['executing', 'recovery'].includes(p.status) ? button('記録を削除', 'deleteJob', 'quiet small', `data-id="${p.id}" ${disabled()}`) : ''}</div>${p.status === 'ready' ? '<p class="muted">表示中の変更だけを一括承認します。10分経過・再起動・対象変更で承認は失効します。</p>' : ''}</div>`;
 }
 function avatars() {
-  return `<div class="section-heading"><h2>あなたのアバター</h2>${button('＋ VRMをインポート', 'importAvatar', 'primary', disabled())}</div><p class="muted">モデルの探索・選定・入手はユーザーに委ねます。外見やキャラクター設定による制限はありません。</p><div class="notice">VRM 0.x / 1.0、100MiB以下。モデルにない表情は省略し、状態は会話画面で表示します。</div>${state.avatars.length ? `<div class="card">${state.avatars.map((a) => `<div class="avatar-item"><div class="row spread"><strong>${esc(a.name)} ${a.id === state.settings.avatarId ? '✓' : ''}</strong><span class="tag">VRM ${a.version === '1' ? '1.0' : '0.x'}</span></div><p class="muted">作者: ${esc(a.authors)} · ${bytes(a.size)}</p><div class="license">${esc(a.license)}</div><div class="actions">${button('表示する', 'selectAvatar', 'small', `data-id="${a.id}"`)}${button('管理コピーを削除', 'deleteAvatar', 'small quiet danger', `data-id="${a.id}"`)}</div></div>`).join('')}</div>` : '<div class="empty-state"><div class="avatar-empty"><div class="orb"></div></div><h3>まだアバターがありません</h3><p class="muted">お手元のVRMファイルをインポートしてください。<br>原本は変更せず、アプリの保存領域へコピーします。</p></div>'}`;
+  return `${gestureControls()}<div class="section-heading"><h2>あなたのアバター</h2>${button('＋ VRMをインポート', 'importAvatar', 'primary', disabled())}</div><p class="muted">モデルの探索・選定・入手はユーザーに委ねます。外見やキャラクター設定による制限はありません。</p><div class="notice">VRM 0.x / 1.0、100MiB以下。モデルにない表情は省略し、状態は会話画面で表示します。</div>${state.avatars.length ? `<div class="card">${state.avatars.map((a) => `<div class="avatar-item"><div class="row spread"><strong>${esc(a.name)} ${a.id === state.settings.avatarId ? '✓' : ''}</strong><span class="tag">VRM ${a.version === '1' ? '1.0' : '0.x'}</span></div><p class="muted">作者: ${esc(a.authors)} · ${bytes(a.size)}</p><div class="license">${esc(a.license)}</div><div class="actions">${button('表示する', 'selectAvatar', 'small', `data-id="${a.id}"`)}${button('管理コピーを削除', 'deleteAvatar', 'small quiet danger', `data-id="${a.id}"`)}</div></div>`).join('')}</div>` : '<div class="empty-state"><div class="avatar-empty"><div class="orb"></div></div><h3>まだアバターがありません</h3><p class="muted">お手元のVRMファイルをインポートしてください。<br>原本は変更せず、アプリの保存領域へコピーします。</p></div>'}`;
 }
 function settingsForm() {
   const s = state.settings;
-  return `<form id="settings-form"><div class="card"><div class="eyebrow">Local intelligence</div><h3>ローカルLLM</h3><p class="muted">起動済みのllama-serverに接続します。モデルのダウンロードや外部通信は行いません。</p><div class="form-grid"><div><label for="endpoint">接続先</label><input id="endpoint" name="endpoint" value="${esc(s.endpoint)}" required></div><div><label for="model">モデルID（空欄なら接続時に取得）</label><input id="model" name="model" value="${esc(s.model)}"></div><div><label for="context">コンテキスト上限</label><input id="context" name="context" type="number" min="1024" max="131072" value="${s.context}"></div><div><label for="outputTokens">応答トークン上限</label><input id="outputTokens" name="outputTokens" type="number" min="64" max="4096" value="${s.outputTokens}"></div><div class="wide"><label for="api-key">APIキー（任意）</label><input id="api-key" type="password" autocomplete="off" placeholder="${state.hasApiKey ? '保存済み。変更するときだけ入力' : '未設定'}"><label class="check"><input id="clear-key" type="checkbox">保存済みキーを削除</label></div></div><div class="actions">${button('設定を保存', 'saveSettings', 'primary', `type="button" ${disabled()}`)}${button('接続を確認', 'connect', '', `type="button" ${disabled()}`)}</div></div><div class="card"><div class="eyebrow">Personality</div><h3>話し方</h3><div class="form-grid"><div><label for="persona">キャラクター名</label><input id="persona" name="persona" maxlength="80" value="${esc(s.persona)}"></div><div><label for="userName">あなたの呼び名</label><input id="userName" name="userName" maxlength="80" value="${esc(s.userName)}"></div><div class="wide"><label for="style">口調・応答の好み</label><textarea id="style" name="style" rows="3" maxlength="2000">${esc(s.style)}</textarea></div></div></div><div class="card"><div class="eyebrow">Desktop & storage</div><h3>表示と保存</h3><div class="form-grid"><div><label for="scale">アバター倍率（0.5〜1.8）</label><input id="scale" name="scale" type="number" step="0.1" min="0.5" max="1.8" value="${s.scale}"></div><div><label for="fps">描画上限fps（10〜60）</label><input id="fps" name="fps" type="number" min="10" max="60" value="${s.fps}"></div></div><label class="check"><input name="alwaysOnTop" type="checkbox" ${s.alwaysOnTop ? 'checked' : ''}>アバターを最前面に表示</label><label class="check"><input name="autoStart" type="checkbox" ${s.autoStart ? 'checked' : ''}>Windowsログイン時に起動</label><label class="check"><input name="saveHistory" type="checkbox" ${s.saveHistory ? 'checked' : ''}>会話履歴を保存する</label><p class="muted">履歴保存を無効にしても、ファイル操作の復旧記録は保存します。既存の会話は「全履歴を削除」で消せます。保存データはOSアカウントの権限で保護します。会話削除は通常のバックアップにも反映します。復旧用に保管した damaged- フォルダと外部へコピーしたバックアップは残るため、必要なら保存先から別途削除してください。</p><div class="path">${esc(state.dataPath)}</div><div class="actions">${button('設定を保存', 'saveSettings', 'primary', `type="button" ${disabled()}`)}${button('保存先を開く', 'openData', '', 'type="button"')}${button('バックアップを作成', 'backupData', '', `type="button" ${disabled()}`)}${button('全履歴を削除', 'clearHistory', 'quiet danger', `type="button" ${disabled()}`)}</div></div></form>`;
+  return `<form id="settings-form">${localSettings()}<div class="card"><div class="eyebrow">Personality</div><h3>話し方</h3><div class="form-grid"><div><label for="persona">キャラクター名</label><input id="persona" name="persona" maxlength="80" value="${esc(s.persona)}"></div><div><label for="userName">あなたの呼び名</label><input id="userName" name="userName" maxlength="80" value="${esc(s.userName)}"></div><div class="wide"><label for="style">口調・応答の好み</label><textarea id="style" name="style" rows="3" maxlength="2000">${esc(s.style)}</textarea></div></div></div><div class="card"><div class="eyebrow">Desktop & storage</div><h3>表示と保存</h3><div class="form-grid">${selectSetting(
+    'motionLevel',
+    'モーション',
+    [
+      ['off', 'オフ'],
+      ['gentle', 'おだやか'],
+      ['lively', 'にぎやか'],
+    ],
+  )}${selectSetting('renderQuality', '描画品質', [
+    ['eco', '省リソース'],
+    ['balanced', '標準'],
+    ['high', '高画質'],
+  ])}<div><label for="scale">アバター倍率（0.5〜1.8）</label><input id="scale" name="scale" type="number" step="0.1" min="0.5" max="1.8" value="${s.scale}"></div><div><label for="fps">描画上限fps（10〜60）</label><input id="fps" name="fps" type="number" min="10" max="60" value="${s.fps}"></div></div><label class="check"><input name="alwaysOnTop" type="checkbox" ${s.alwaysOnTop ? 'checked' : ''}>アバターを最前面に表示</label><label class="check"><input name="autoStart" type="checkbox" ${s.autoStart ? 'checked' : ''}>Windowsログイン時に起動</label><label class="check"><input name="saveHistory" type="checkbox" ${s.saveHistory ? 'checked' : ''}>会話履歴を保存する</label><p class="muted">履歴保存を無効にしても、ファイル操作の復旧記録は保存します。既存の会話は「全履歴を削除」で消せます。保存データはOSアカウントの権限で保護します。会話削除は通常のバックアップにも反映します。復旧用に保管した damaged- フォルダと外部へコピーしたバックアップは残るため、必要なら保存先から別途削除してください。</p><div class="path">${esc(state.dataPath)}</div><div class="actions">${button('設定を保存', 'saveSettings', 'primary', `type="button" ${disabled()}`)}${button('保存先を開く', 'openData', '', 'type="button"')}${button('バックアップを作成', 'backupData', '', `type="button" ${disabled()}`)}${button('全履歴を削除', 'clearHistory', 'quiet danger', `type="button" ${disabled()}`)}</div></div></form>`;
 }
 function conversationPlans(id: string) {
   const plans = state.plans.filter((p) => p.conversationId === id);
@@ -259,8 +307,11 @@ async function saveSettings() {
     s = { ...state.settings };
   for (const key of ['endpoint', 'model', 'persona', 'userName', 'style'] as const)
     s[key] = String(data.get(key) || '');
-  for (const key of ['context', 'outputTokens', 'scale', 'fps'] as const)
+  for (const key of ['context', 'outputTokens', 'scale', 'fps', 'idleUnloadMinutes'] as const)
     s[key] = Number(data.get(key));
+  s.llmMode = String(data.get('llmMode')) as typeof s.llmMode;
+  s.motionLevel = String(data.get('motionLevel')) as typeof s.motionLevel;
+  s.renderQuality = String(data.get('renderQuality')) as typeof s.renderQuality;
   for (const key of ['alwaysOnTop', 'autoStart', 'saveHistory'] as const) s[key] = data.has(key);
   const key = document.querySelector<HTMLInputElement>('#api-key')!.value;
   state = await api.settings(
@@ -328,6 +379,21 @@ function run(el: HTMLElement) {
   }
   action(async () => {
     switch (a) {
+      case 'chooseModelDirectory':
+        await api.chooseModelDirectory();
+        break;
+      case 'chooseLlamaServer':
+        await api.chooseLlamaServer();
+        break;
+      case 'refreshModels':
+        await api.refreshModels();
+        break;
+      case 'unloadModel':
+        await api.unloadModel();
+        break;
+      case 'gesture':
+        await api.gesture(id as Gesture);
+        break;
       case 'new':
         conversationId = await api.newConversation();
         tab = 'chat';

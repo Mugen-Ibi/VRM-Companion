@@ -85,8 +85,14 @@ function mainHarness() {
   const makeWindow = (file: string, output: any[]) => {
     const frame = { url: pathToFileURL(path.join(root, 'dist/renderer', file)).href };
     let visible = true;
+    let bounds = { x: 100, y: 200, width: 380, height: 540 },
+      ignored = false,
+      invalidations = 0;
     return {
       webContents: {
+        invalidate() {
+          invalidations++;
+        },
         isCrashed: () => false,
         mainFrame: frame,
         send(channel: string, value: unknown) {
@@ -100,6 +106,14 @@ function mainHarness() {
       isDestroyed: () => false,
       isVisible: () => visible,
       isMinimized: () => false,
+      getPosition: () => [bounds.x, bounds.y],
+      setBounds: (value: typeof bounds) => {
+        bounds = value;
+      },
+      setIgnoreMouseEvents: (value: boolean) => {
+        ignored = value;
+      },
+      dragInfo: () => ({ bounds, ignored, invalidations }),
       showInactive() {
         visible = true;
         shown++;
@@ -198,6 +212,9 @@ function mainHarness() {
     },
     report: (id: string, ok: boolean, error?: string) =>
       events.get('avatar:report')!(avatarEvent, id, ok, error),
+    avatarEvent: (name: string, ...args: unknown[]) =>
+      events.get('avatar:' + name)!(avatarEvent, ...args),
+    dragInfo: () => structuredClone(avatarWindow.dragInfo()),
     setSelected: (candidate: Avatar) => {
       store.put('avatars', candidate.id, candidate);
       context.testMain.setSelected(candidate.id);
@@ -212,6 +229,28 @@ function mainHarness() {
     copyPath: (candidate: Avatar) => path.join(store.directory, 'avatars', candidate.id + '.vrm'),
   };
 }
+
+test('drag holds hit testing, coalesces movement, keeps dimensions and releases on hide', async () => {
+  const h = mainHarness();
+  h.avatarEvent('dragging', true);
+  h.avatarEvent('hit', false);
+  assert.equal(h.dragInfo().ignored, false, 'transparent pixels must not release a held drag');
+  h.avatarEvent('drag', 4, 5);
+  h.avatarEvent('drag', 6, -3);
+  h.avatarEvent('drag', Infinity, 0);
+  h.avatarEvent('drag', 10000, 0);
+  assert.equal(h.dragInfo().bounds.x, 100, 'movement waits for the single scheduled flush');
+  assert.equal(h.timers.size, 1);
+  await h.invoke('hideAvatar');
+  assert.deepEqual(h.dragInfo().bounds, { x: 110, y: 202, width: 380, height: 540 });
+  assert.equal(h.dragInfo().invalidations, 1);
+  assert.equal(h.dragInfo().ignored, true);
+  assert.equal(h.timers.size, 0);
+  h.avatarEvent('drag', 5, 5);
+  assert.equal(h.timers.size, 0, 'a stale drag cannot move a hidden avatar');
+  h.avatarEvent('hit', true);
+  assert.equal(h.dragInfo().ignored, false, 'normal hover works again after drag');
+});
 
 test('task releases busy/controller after the initial state broadcast throws', async () => {
   const h = mainHarness();

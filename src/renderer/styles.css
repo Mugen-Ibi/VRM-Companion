@@ -651,3 +651,30 @@ td .reason {
   padding: 8px 10px;
   font-size: 12px;
 }
+.model-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.model-controls label {
+  margin: 0;
+}
+.model-controls select {
+  min-width: 160px;
+  max-width: 100%;
+  flex: 1;
+  width: 220px;
+}
+.model-error {
+  width: 100%;
+  color: #a13737;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.conversation-toolbar {
+  flex-wrap: wrap;
+  gap: 12px;
+}

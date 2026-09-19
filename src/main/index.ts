@@ -34,6 +34,7 @@ import { Store } from './store';
 import { Organizer, NativeFiles } from './files';
 import { Llama, endpoint } from './llama';
 import { inspectVRM } from './vrm';
+import { ModelRuntime } from './model-runtime';
 
 const base = app.getAppPath(),
   panelFile = path.join(base, 'dist/renderer/index.html'),
@@ -63,10 +64,22 @@ let previewGeneration = 0,
   avatarDialogOpen = false;
 let ignoredMouse: boolean | undefined;
 let recoveryWarning: string | undefined;
+let runtime: ModelRuntime | undefined;
+let avatarDragging = false,
+  dragX = 0,
+  dragY = 0;
+let dragTimer: ReturnType<typeof setTimeout> | undefined;
 const idSchema = z.string().uuid(),
   textSchema = z.string().min(1).max(6000);
 const settingsSchema = z
   .object({
+    llmMode: z.enum(['external', 'managed']),
+    modelDirectory: z.string().max(32768),
+    serverPath: z.string().max(32768),
+    managedModel: z.string().max(64),
+    idleUnloadMinutes: z.number().int().min(0).max(120),
+    motionLevel: z.enum(['off', 'gentle', 'lively']),
+    renderQuality: z.enum(['eco', 'balanced', 'high']),
     endpoint: z.string().max(200),
     model: z.string().max(200),
     context: z.number().int().min(1024).max(131072),
@@ -90,6 +103,7 @@ function effectiveSettings() {
 }
 function state(): State {
   return {
+    llm: runtime?.state ?? { models: [], status: 'unloaded', loadedModel: '' },
     settings,
     avatarVisible:
       !!avatarWindow &&
@@ -153,13 +167,23 @@ function apiKey() {
   const secret = store.get<string>('secrets', 'apiKey');
   return secret ? safeStorage.decryptString(Buffer.from(secret, 'base64')) : '';
 }
-const llm = new Llama(() => settings, apiKey);
+const llm = new Llama(
+  () =>
+    settings.llmMode === 'managed'
+      ? { ...settings, endpoint: runtime!.credentials().endpoint, model: 'companion-local' }
+      : settings,
+  () => (settings.llmMode === 'managed' ? runtime!.credentials().key : apiKey()),
+);
+async function ensureModel(signal: AbortSignal) {
+  if (settings.llmMode === 'managed') await runtime!.ensure(settings, signal);
+}
 async function task(
   fn: (signal: AbortSignal) => Promise<void | Phase>,
   taskPhase: Phase = 'working',
 ) {
   if (busy) throw new Error('処理中です。停止してから操作してください。');
   busy = true;
+  runtime?.cancelIdle();
   phase = taskPhase;
   controller = new AbortController();
   try {
@@ -172,6 +196,7 @@ async function task(
   } finally {
     busy = false;
     controller = null;
+    runtime?.scheduleIdle(settings.idleUnloadMinutes);
     broadcast();
   }
 }
@@ -214,7 +239,10 @@ function setAvatarVisible(visible: boolean) {
   if (visible) {
     if (avatarWindow.webContents.isCrashed()) avatarWindow.reload();
     avatarWindow.showInactive();
-  } else avatarWindow.hide();
+  } else {
+    finishDrag();
+    avatarWindow.hide();
+  }
   // Hiding remains available even if preferences cannot currently be saved.
   try {
     store.put('settings', 'main', settings);
@@ -233,6 +261,33 @@ function ignoreMouse(value: boolean) {
   ignoredMouse = value;
 }
 function configureInteraction() {
+  finishDrag();
+  ignoreMouse(interaction !== 'move');
+}
+function moveAvatar() {
+  clearTimeout(dragTimer);
+  dragTimer = undefined;
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  if (dragX || dragY) {
+    const [x, y] = avatarWindow.getPosition();
+    // Specify the fixed DIP size as well: repeated setPosition on a transparent
+    // window can accumulate physical-pixel rounding at fractional Windows DPI.
+    avatarWindow.setBounds({
+      x: Math.round(x + dragX),
+      y: Math.round(y + dragY),
+      width: 380,
+      height: 540,
+    });
+    dragX = 0;
+    dragY = 0;
+    // Moving a transparent HWND needs an explicit compositor repaint on Windows.
+    avatarWindow.webContents.invalidate();
+  }
+}
+function finishDrag() {
+  if (!avatarDragging) return;
+  moveAvatar();
+  avatarDragging = false;
   ignoreMouse(interaction !== 'move');
 }
 async function discardPreview() {
@@ -350,6 +405,7 @@ function createWindows() {
     }
   });
   avatarWindow.webContents.on('render-process-gone', () => {
+    finishDrag();
     void discardPreview().catch(() => {});
     phase = 'error';
     emit({
@@ -410,7 +466,7 @@ function createWindows() {
 }
 function registerAPI() {
   handle('state', () => state());
-  handle('settings', (value: unknown, key: unknown) => {
+  handle('settings', async (value: unknown, key: unknown) => {
     idleOnly();
     const next = settingsSchema.parse(value);
     endpoint(next.endpoint);
@@ -421,6 +477,9 @@ function registerAPI() {
     next.avatarVisible = settings.avatarVisible;
     next.avatarX = settings.avatarX;
     next.avatarY = settings.avatarY;
+    next.modelDirectory = settings.modelDirectory;
+    next.serverPath = settings.serverPath;
+    next.managedModel = settings.managedModel;
     if (key !== undefined) {
       const secret = z.string().max(512).parse(key);
       if (secret) {
@@ -429,8 +488,12 @@ function registerAPI() {
         store.put('secrets', 'apiKey', safeStorage.encryptString(secret).toString('base64'));
       } else store.delete('secrets', 'apiKey');
     }
-    store.put('settings', 'main', next);
-    settings = next;
+    await task(async () => {
+      if (next.llmMode !== settings.llmMode || next.context !== settings.context)
+        await runtime?.stop();
+      store.put('settings', 'main', next);
+      settings = next;
+    }, 'idle');
     avatarWindow.setAlwaysOnTop(settings.alwaysOnTop);
     app.setLoginItemSettings({ openAtLogin: settings.autoStart });
     broadcast();
@@ -439,13 +502,79 @@ function registerAPI() {
   handle('connect', async () => {
     let models: string[] = [];
     await task(async (signal) => {
+      await ensureModel(signal);
       models = await llm.connect(signal);
-      if (!settings.model && models[0]) {
+      if (settings.llmMode === 'external' && !settings.model && models[0]) {
         settings.model = models[0];
         store.put('settings', 'main', settings);
       }
     }, 'thinking');
     return { models, message: 'llama-serverに接続しました。' };
+  });
+  handle('chooseModelDirectory', async () => {
+    await task(async (signal) => {
+      const result = await dialog.showOpenDialog(panel, {
+        title: 'GGUFモデルのフォルダー',
+        properties: ['openDirectory'],
+      });
+      if (result.canceled) return;
+      signal.throwIfAborted();
+      const directory = await fs.realpath(result.filePaths[0]);
+      await runtime!.stop();
+      const models = await runtime!.refresh(directory);
+      settings = { ...settings, modelDirectory: directory, managedModel: models[0]?.id ?? '' };
+      store.put('settings', 'main', settings);
+    });
+  });
+  handle('chooseLlamaServer', async () => {
+    await task(async (signal) => {
+      const result = await dialog.showOpenDialog(panel, {
+        title: 'llama-server.exeを選択',
+        properties: ['openFile'],
+        filters: [{ name: 'llama-server.exe', extensions: ['exe'] }],
+      });
+      if (result.canceled) return;
+      signal.throwIfAborted();
+      const executable = await fs.realpath(result.filePaths[0]);
+      if (path.basename(executable).toLowerCase() !== 'llama-server.exe')
+        throw new Error('llama-server.exeを選択してください。');
+      await runtime!.stop();
+      settings = { ...settings, serverPath: executable };
+      store.put('settings', 'main', settings);
+    });
+  });
+  handle('refreshModels', () =>
+    task(async () => {
+      await runtime!.refresh(settings.modelDirectory);
+    }),
+  );
+  handle('selectModel', async (id: unknown) => {
+    const selected = z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .parse(id);
+    await task(async (signal) => {
+      if (settings.llmMode !== 'managed')
+        throw new Error('設定で「フォルダーから選択」に切り替えてください。');
+      const models = await runtime!.refresh(settings.modelDirectory);
+      if (!models.some((m) => m.id === selected))
+        throw new Error('モデルがありません。フォルダーを再読込してください。');
+      if (settings.managedModel !== selected) await runtime!.stop();
+      settings = { ...settings, managedModel: selected };
+      store.put('settings', 'main', settings);
+      await ensureModel(signal);
+    }, 'thinking');
+  });
+  handle('unloadModel', () =>
+    task(async () => {
+      await runtime!.stop();
+    }, 'idle'),
+  );
+  handle('gesture', (name: unknown) => {
+    avatarWindow.webContents.send(
+      'avatar:gesture',
+      z.enum(['wave', 'nod', 'bow', 'stretch']).parse(name),
+    );
   });
   handle('newConversation', () => {
     idleOnly();
@@ -479,6 +608,7 @@ function registerAPI() {
     persist(c);
     await task(async (signal) => {
       try {
+        await ensureModel(signal);
         const intent = await llm.intent(input, !!c.rootId, signal);
         if (intent.intent === 'chat') {
           const history = [...c.messages];
@@ -781,7 +911,14 @@ function registerAPI() {
   });
   ipcMain.on('avatar:hit', (event, hit) => {
     verifySender(event, avatarWindow, avatarFile);
-    if (interaction === 'auto') ignoreMouse(hit !== true);
+    if (interaction === 'auto' && !avatarDragging) ignoreMouse(hit !== true);
+  });
+  ipcMain.on('avatar:dragging', (event, active) => {
+    verifySender(event, avatarWindow, avatarFile);
+    if (active === true && interaction !== 'pass') {
+      avatarDragging = true;
+      ignoreMouse(false);
+    } else if (active === false) finishDrag();
   });
   ipcMain.on('avatar:open', (event) => {
     verifySender(event, avatarWindow, avatarFile);
@@ -792,12 +929,18 @@ function registerAPI() {
     Menu.buildFromTemplate([
       { label: 'アバターを隠す', click: () => setAvatarVisible(false) },
       { label: '会話を開く', click: showPanel },
+      { type: 'separator' },
+      ...(['wave', 'nod', 'bow', 'stretch'] as const).map((name, i) => ({
+        label: ['手を振る', 'うなずく', 'おじぎ', '伸びをする'][i],
+        click: () => avatarWindow.webContents.send('avatar:gesture', name),
+      })),
     ]).popup({ window: avatarWindow });
   });
   ipcMain.on('avatar:drag', (event, dx, dy) => {
     verifySender(event, avatarWindow, avatarFile);
     if (
       interaction === 'pass' ||
+      !avatarDragging ||
       typeof dx !== 'number' ||
       typeof dy !== 'number' ||
       !Number.isFinite(dx) ||
@@ -806,8 +949,9 @@ function registerAPI() {
       Math.abs(dy) > 200
     )
       return;
-    const [x, y] = avatarWindow.getPosition();
-    avatarWindow.setPosition(Math.round(x + dx), Math.round(y + dy));
+    dragX += dx;
+    dragY += dy;
+    if (!dragTimer) dragTimer = setTimeout(moveAvatar, 16);
   });
   ipcMain.on('avatar:report', (event, id, ok, error) => {
     verifySender(event, avatarWindow, avatarFile);
@@ -904,6 +1048,19 @@ else {
         }
         callback({ cancel: !allowed });
       });
+      runtime = new ModelRuntime(
+        () => {
+          if (panel && !quitting) broadcast();
+        },
+        () => busy,
+      );
+      if (settings.modelDirectory) {
+        try {
+          await runtime.refresh(settings.modelDirectory);
+        } catch {
+          runtime.state.error = 'モデルのフォルダーを開けません。設定で選び直してください。';
+        }
+      }
       createWindows();
       registerAPI();
     } catch (error) {
@@ -956,6 +1113,18 @@ else {
           app.quit();
         }
       }, 100);
+      return;
+    }
+    if (runtime?.running) {
+      event.preventDefault();
+      quitting = true;
+      void runtime
+        .stop()
+        .then(() => app.quit())
+        .catch((error) => {
+          dialog.showErrorBox('LLMの停止に失敗しました', String(error));
+          quitting = false;
+        });
       return;
     }
     quitting = true;

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { DEFAULTS, CATEGORIES, type State } from '../src/shared/types';
+import { AvatarMotion } from '../src/renderer/motion';
 
 // Exercise the actual renderer sources without opening another Electron instance
 // or touching application data. GPU, IPC and DOM edges are controlled test doubles.
@@ -160,6 +161,8 @@ function avatarHarness() {
     },
     report: (id: string, ok: boolean) => reports.push({ id, ok }),
     hit() {},
+    dragging() {},
+    onGesture() {},
     drag: (x: number, y: number) => drags.push([x, y]),
     openPanel: () => panelOpens++,
     openMenu: () => menuOpens++,
@@ -169,6 +172,7 @@ function avatarHarness() {
     'avatar.ts',
     {
       THREE,
+      AvatarMotion,
       GLTFLoader,
       VRMLoaderPlugin: class {},
       VRMUtils: {
@@ -181,11 +185,12 @@ function avatarHarness() {
         avatarHost: api,
         addEventListener: (name: string, fn: () => void) => windowEvents.set(name, fn),
       },
-      document: { hidden: false, querySelector: () => canvas },
+      document: { hidden: false, querySelector: () => canvas, addEventListener() {} },
       devicePixelRatio: 1,
       innerWidth: 380,
       innerHeight: 540,
       requestAnimationFrame() {},
+      cancelAnimationFrame() {},
     },
     'globalThis.testAPI={update,frame,current:()=>({loadedId,loadingId}),camera:()=>camera};',
   );
@@ -484,6 +489,7 @@ function panelHarness(initial: Partial<State> = {}) {
               : elements.find((el) => selector === '#' + el.id),
   };
   const state: State = {
+    llm: { models: [], status: 'unloaded', loadedModel: '' },
     settings: { ...DEFAULTS },
     conversations: [{ id: 'conversation', title: 'New', messages: [] }],
     roots: [],

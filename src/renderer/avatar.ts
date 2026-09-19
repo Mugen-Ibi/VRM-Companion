@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils, type VRM } from '@pixiv/three-vrm';
 import type { Settings, Phase } from '../shared/types';
+import { AvatarMotion } from './motion';
 const api = window.avatarHost,
   canvas = document.querySelector<HTMLCanvasElement>('#avatar-canvas')!;
 const renderer = new THREE.WebGLRenderer({
@@ -11,7 +12,7 @@ const renderer = new THREE.WebGLRenderer({
   powerPreference: 'low-power',
 });
 renderer.setClearColor(0x000000, 0);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.setPixelRatio(1);
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -21,7 +22,7 @@ const light = new THREE.DirectionalLight(0xfff6e9, 2);
 light.position.set(-1, 2, 3);
 scene.add(light);
 const normalizedHeight = 1.65,
-  frameMargin = 1.12;
+  frameMargin = 1.35;
 const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.01, 100);
 let modelDimensions = { width: 1, height: normalizedHeight, depth: 0 };
 let vrm: VRM | undefined,
@@ -31,7 +32,10 @@ let vrm: VRM | undefined,
   phase: Phase = 'idle',
   visible = false,
   generation = 0,
-  elapsed = 0,
+  motion: AvatarMotion | undefined,
+  animation: number | undefined,
+  lastHit = 0,
+  reportedHit = false,
   last = 0,
   dragged = false,
   down: { x: number; y: number; pointerId: number } | null = null;
@@ -60,16 +64,29 @@ function positionCamera() {
 }
 function endDrag() {
   const pointerId = down?.pointerId;
+  if (down) api.dragging(false);
   down = null;
   dragged = false;
+  reportedHit = false;
   if (pointerId !== undefined && canvas.hasPointerCapture(pointerId))
     canvas.releasePointerCapture(pointerId);
 }
 async function update(value: { settings: Settings; phase: Phase; visible: boolean }) {
+  const quality = settings?.renderQuality;
   settings = value.settings;
   phase = value.phase;
   visible = value.visible;
   if (!visible) endDrag();
+  if (quality !== settings.renderQuality) {
+    renderer.setPixelRatio(
+      Math.min(
+        devicePixelRatio,
+        settings.renderQuality === 'high' ? 2 : settings.renderQuality === 'balanced' ? 1.5 : 1,
+      ),
+    );
+    renderer.setSize(innerWidth, innerHeight);
+  }
+  schedule();
   positionCamera();
   const id = settings.avatarId;
   if (id !== null && id === loadingId) return;
@@ -85,10 +102,13 @@ async function update(value: { settings: Settings; phase: Phase; visible: boolea
       scene.remove(vrm.scene);
       VRMUtils.deepDispose(vrm.scene);
       vrm = undefined;
+      motion = undefined;
     }
     loadedId = null;
     endDrag();
     api.hit(false);
+    renderer.render(scene, camera);
+    schedule();
     return;
   }
   loadingId = id;
@@ -112,8 +132,8 @@ async function update(value: { settings: Settings; phase: Phase; visible: boolea
     candidate.scene.traverse((obj) => {
       obj.frustumCulled = false;
     });
-    candidate.humanoid.getNormalizedBoneNode('leftUpperArm')?.rotation.set(0, 0, -0.9);
-    candidate.humanoid.getNormalizedBoneNode('rightUpperArm')?.rotation.set(0, 0, 0.9);
+    candidate.humanoid.getNormalizedBoneNode('leftUpperArm')?.rotation.set(0, 0, -1.25);
+    candidate.humanoid.getNormalizedBoneNode('rightUpperArm')?.rotation.set(0, 0, 1.25);
     // Measure the posed, skinned geometry, then center any model around the same
     // floor and X/Z origin. Preserve transforms already present on the GLTF root.
     candidate.update(0);
@@ -155,12 +175,14 @@ async function update(value: { settings: Settings; phase: Phase; visible: boolea
       VRMUtils.deepDispose(vrm.scene);
     }
     vrm = candidate;
+    motion = new AvatarMotion(vrm);
     scene.add(vrm.scene);
     candidateScene = undefined;
     modelDimensions = dimensions;
     positionCamera();
     loadedId = id;
     loadingId = null;
+    schedule();
     api.report(id, true);
   } catch (error) {
     if (gen === generation) {
@@ -176,6 +198,12 @@ function hit(e: PointerEvent) {
   ray.setFromCamera(mouse, camera);
   return !!vrm && ray.intersectObject(vrm.scene, true).length > 0;
 }
+function reportHit(value: boolean) {
+  if (reportedHit !== value) {
+    reportedHit = value;
+    api.hit(value);
+  }
+}
 canvas.addEventListener('pointermove', (e) => {
   if (down) {
     const dx = e.screenX - down.x,
@@ -183,11 +211,15 @@ canvas.addEventListener('pointermove', (e) => {
     if (Math.abs(dx) + Math.abs(dy) > 2) dragged = true;
     api.drag(dx, dy);
     down = { x: e.screenX, y: e.screenY, pointerId: down.pointerId };
-  } else api.hit(hit(e));
+  } else if (e.timeStamp - lastHit >= 33) {
+    lastHit = e.timeStamp;
+    reportHit(hit(e));
+  }
 });
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
   if (hit(e)) {
+    api.dragging(true);
     canvas.setPointerCapture(e.pointerId);
     down = { x: e.screenX, y: e.screenY, pointerId: e.pointerId };
     dragged = false;
@@ -200,8 +232,12 @@ canvas.addEventListener('pointerup', (e) => {
 });
 canvas.addEventListener('pointercancel', endDrag);
 canvas.addEventListener('lostpointercapture', endDrag);
+window.addEventListener('blur', endDrag);
 canvas.addEventListener('pointerleave', () => {
-  if (!down) api.hit(false);
+  if (!down) {
+    reportHit(false);
+    mouse.set(0, 0);
+  }
 });
 canvas.addEventListener('contextmenu', (e) => {
   e.preventDefault();
@@ -213,24 +249,28 @@ window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   positionCamera();
 });
+function schedule() {
+  const active = settings && visible && (!document.hidden || down) && vrm;
+  if (active && animation === undefined) animation = requestAnimationFrame(frame);
+  if (!active && animation !== undefined) {
+    cancelAnimationFrame(animation);
+    animation = undefined;
+    last = 0;
+  }
+}
+document.addEventListener('visibilitychange', schedule);
 function frame(time: number) {
-  requestAnimationFrame(frame);
-  if (!settings || !visible || document.hidden) {
+  animation = undefined;
+  schedule();
+  if (!settings || !visible || (document.hidden && !down)) {
     last = time;
     return;
   }
-  if (time - last < 1000 / settings.fps) return;
+  if (time - last < 1000 / settings.fps - 0.8) return;
   const dt = Math.min((time - last) / 1000, 0.05);
   last = time;
-  elapsed += dt;
   if (vrm) {
-    const expressions = vrm.expressionManager;
-    const blink = Math.sin(elapsed * 1.1) > 0.995 ? 1 : 0;
-    expressions?.setValue('blink', blink);
-    expressions?.setValue('happy', phase === 'success' ? 0.3 : 0);
-    expressions?.setValue('relaxed', phase === 'thinking' ? 0.2 : 0);
-    const chest = vrm.humanoid.getNormalizedBoneNode('chest');
-    if (chest) chest.rotation.x = Math.sin(elapsed * 1.8) * 0.012;
+    motion?.update(dt, phase, settings.motionLevel, mouse, !!down);
     vrm.update(dt);
   }
   renderer.render(scene, camera);
@@ -243,4 +283,4 @@ api.onUpdate((value) => {
 void api.state().then((value) => {
   if (!receivedUpdate) void update(value);
 });
-requestAnimationFrame(frame);
+api.onGesture((name) => motion?.play(name));

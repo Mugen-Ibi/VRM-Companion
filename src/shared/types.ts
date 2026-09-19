@@ -18,6 +18,13 @@ export type Phase =
   | 'canceled'
   | 'attention';
 export interface Settings {
+  llmMode: 'external' | 'managed';
+  modelDirectory: string;
+  serverPath: string;
+  managedModel: string;
+  idleUnloadMinutes: number;
+  motionLevel: 'off' | 'gentle' | 'lively';
+  renderQuality: 'eco' | 'balanced' | 'high';
   endpoint: string;
   model: string;
   context: number;
@@ -36,6 +43,13 @@ export interface Settings {
   avatarY?: number;
 }
 export const DEFAULTS: Settings = {
+  llmMode: 'external',
+  modelDirectory: '',
+  serverPath: '',
+  managedModel: '',
+  idleUnloadMinutes: 5,
+  motionLevel: 'gentle',
+  renderQuality: 'eco',
   endpoint: 'http://127.0.0.1:8080',
   model: '',
   context: 4096,
@@ -137,6 +151,7 @@ export interface Pending {
   needsTarget: boolean;
 }
 export interface State {
+  llm: LlmState;
   avatarVisible: boolean;
   settings: Settings;
   roots: Root[];
@@ -157,6 +172,12 @@ export type AppEvent =
   | { type: 'error'; message: string };
 export type Reply<T> = { ok: true; value: T } | { ok: false; error: string };
 export interface API {
+  chooseModelDirectory(): Promise<void>;
+  chooseLlamaServer(): Promise<void>;
+  refreshModels(): Promise<void>;
+  selectModel(id: string): Promise<void>;
+  unloadModel(): Promise<void>;
+  gesture(name: Gesture): Promise<void>;
   state(): Promise<State>;
   settings(value: Settings, key?: string): Promise<State>;
   connect(): Promise<{ models: string[]; message: string }>;
@@ -195,8 +216,22 @@ export interface AvatarAPI {
   openPanel(): void;
   openMenu(): void;
   drag(dx: number, dy: number): void;
+  dragging(active: boolean): void;
+  onGesture(fn: (name: Gesture) => void): () => void;
   report(id: string, ok: boolean, error?: string): void;
   onUpdate(fn: (state: { settings: Settings; phase: Phase; visible: boolean }) => void): () => void;
+}
+export type Gesture = 'wave' | 'nod' | 'bow' | 'stretch';
+export interface LocalModel {
+  id: string;
+  name: string;
+  size: number;
+}
+export interface LlmState {
+  models: LocalModel[];
+  status: 'unloaded' | 'loading' | 'ready' | 'stopping' | 'error';
+  loadedModel: string;
+  error?: string;
 }
 declare global {
   interface Window {

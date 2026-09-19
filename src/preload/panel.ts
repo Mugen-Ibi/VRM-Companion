@@ -6,6 +6,12 @@ async function call<T>(name: string, ...args: unknown[]): Promise<T> {
   return r.value;
 }
 const api: API = {
+  chooseModelDirectory: () => call('chooseModelDirectory'),
+  chooseLlamaServer: () => call('chooseLlamaServer'),
+  refreshModels: () => call('refreshModels'),
+  selectModel: (id) => call('selectModel', id),
+  unloadModel: () => call('unloadModel'),
+  gesture: (name) => call('gesture', name),
   state: () => call('state'),
   settings: (v, k) => call('settings', v, k),
   connect: () => call('connect'),
