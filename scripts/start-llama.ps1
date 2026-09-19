@@ -1,25 +1,42 @@
 param(
-  [string]$Model = 'D:\LLM\models\Qwen3.5-9B-Q4_K_M.gguf',
-  [string]$Build = 'b10964',
-  [int]$Port = 8080,
-  [int]$GpuLayers = 99,
-  [int]$Context = 4096
+  [string]$Root = 'D:\LLM', [string]$Model = '', [string]$Version = '',
+  [ValidateRange(1024,65535)][int]$Port = 8080,
+  [ValidateRange(0,999)][int]$GpuLayers = 99,
+  [ValidateRange(1024,1048576)][int]$Context = 16384
 )
 $ErrorActionPreference = 'Stop'
-$workspace = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if ($Build -notmatch '^b[0-9]+$' -or $Port -lt 1024 -or $Port -gt 65535 -or $GpuLayers -lt 0 -or $Context -lt 1024) { throw 'Invalid server options.' }
+$Root = [IO.Path]::GetFullPath($Root)
+if (-not $Model) { $Model = Join-Path $Root 'models/Qwen3.5-9B-Q4_K_M.gguf' }
 if (-not (Test-Path -LiteralPath $Model -PathType Leaf)) { throw 'GGUF model not found. Specify -Model.' }
-$directory = Join-Path $workspace ".local/llama/$Build"
-$server = Get-ChildItem -LiteralPath $directory -Recurse -Filter llama-server.exe | Select-Object -First 1
-if (-not $server) { throw 'Run scripts/setup-llama.ps1 first.' }
-$logs = Join-Path $workspace '.local/logs'
-New-Item -ItemType Directory -Path $logs -Force | Out-Null
-# Start only a new owned process. An existing server is never killed or reconfigured.
-$arguments = @('-m', ('"' + [IO.Path]::GetFullPath($Model) + '"'), '--host', '127.0.0.1', '--port', "$Port", '-c', "$Context", '-ngl', "$GpuLayers", '-np', '1', '--jinja')
-$dllDirs = @(Get-ChildItem -LiteralPath $directory -Recurse -Filter '*.dll' | Select-Object -ExpandProperty DirectoryName -Unique)
-$originalPath = $env:PATH
+$directory = Join-Path $Root 'llama'
+if ($Version) {
+  if ($Version -notmatch '^b\d+-cuda\d+\.\d+$') { throw 'Invalid version.' }
+  $directory = Join-Path $Root "releases/$Version/bin"
+}
+$server = Join-Path $directory 'llama-server.exe'
+if (-not (Test-Path -LiteralPath $server)) { throw 'Run setup-llama.ps1 and use-llama.ps1 first.' }
+if ([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners().Port -contains $Port) { throw "Port $Port is already in use." }
+$logs = Join-Path $Root 'logs'
+$run = Join-Path $Root 'run'
+New-Item -ItemType Directory -Path $logs,$run -Force | Out-Null
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+$outLog = Join-Path $logs "llama-$Port-$stamp.out.log"
+$errLog = Join-Path $logs "llama-$Port-$stamp.err.log"
+$arguments = @('-m', ('"' + [IO.Path]::GetFullPath($Model) + '"'), '--host', '127.0.0.1', '--port', "$Port", '-c', "$Context", '-ngl', "$GpuLayers", '-np', '1', '--jinja', '--temp', '0.3', '--top-p', '0.9', '--repeat-penalty', '1.1')
+$proc = Start-Process -FilePath $server -ArgumentList $arguments -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+@{ pid = $proc.Id; startedAt = $proc.StartTime.ToUniversalTime().ToString('o'); executable = $proc.Path; port = $Port; model = $Model; context = $Context; stdout = $outLog; stderr = $errLog } |
+  ConvertTo-Json | Set-Content -LiteralPath (Join-Path $run "llama-$Port.json") -Encoding utf8
 try {
-  $env:PATH = ($dllDirs -join ';') + ';' + $originalPath
-  $proc = Start-Process -FilePath $server.FullName -ArgumentList $arguments -WorkingDirectory $server.DirectoryName -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logs "llama-$Port.out.log") -RedirectStandardError (Join-Path $logs "llama-$Port.err.log")
-  Write-Output "Started llama-server PID $($proc.Id), endpoint http://127.0.0.1:$Port. Logs: $logs"
-} finally { $env:PATH = $originalPath }
+  $deadline = (Get-Date).AddMinutes(3)
+  do {
+    $proc.Refresh()
+    if ($proc.HasExited) { throw "Server exited ($($proc.ExitCode)). See $errLog" }
+    try { $health = Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 2 } catch { $health = $null }
+    if ($health.status -eq 'ok') { Write-Output "Ready: http://127.0.0.1:$Port (PID $($proc.Id)). Log: $errLog"; return }
+    Start-Sleep -Seconds 1
+  } while ((Get-Date) -lt $deadline)
+  throw "Server readiness timed out. See $errLog"
+} catch {
+  if (-not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit() }
+  throw
+}

@@ -21,14 +21,19 @@ MVPの実装とWindows向けパッケージを作成しました。検証結果�
 
 起動済みの既存サーバーを利用できます。検証モデルはQwen3.5-9B-Q4_K_Mです。GGUFは同梱・自動取得しません。
 
-公式安定v0.4.1に対応するb10964のWindows CUDA版を、`.local/llama/b10964` へ導入するスクリプトを用意しました。GitHubアセットのSHA-256を検証し、既存環境と別に配置します。[公式リリース](https://github.com/ggml-org/llama.cpp/releases/tag/v0.4.1)
+共有環境を `D:\LLM` に集約しています。本体と対応するCUDA DLLは `releases/<build>-cuda<version>/bin` に保存し、`llama` ジャンクションで使用版を切り替えます。モデルは `models`、旧環境は `backups` に保持します。公式ZIPと展開後のファイルのSHA-256を検証します。構成・更新・性能比較は [llama.cpp環境管理](docs/llama-environment.md) を参照してください。
 
 ```powershell
-./scripts/setup-llama.ps1
-./scripts/start-llama.ps1 -Model 'D:\LLM\models\Qwen3.5-9B-Q4_K_M.gguf' -Port 8081
+./scripts/start-llama.ps1
+# 停止
+./scripts/stop-llama.ps1
+# 安定版を取得（稼働版は変えません）
+./scripts/setup-llama.ps1 -Build stable
+# 最新プレリリースを取得
+./scripts/setup-llama.ps1 -Build latest
 ```
 
-8080に既存サーバーがある場合は、どちらか一方を通常利用してください。GPUメモリ8GBでは9Bモデル2つを同時にGPUへ載せる余裕がありません。別ポートを使う際はアプリ設定も変更します。既存プロセスは停止しません。初期設定はcontext 4096・並列1です。
+通常の接続先は `http://127.0.0.1:8080` です。既存の起動設定を引き継ぎ、context 16384・GPU layers 99・並列1を初期値にしています。アプリ側のコンテキスト設定はサーバー以下にしてください。GPUメモリ8GBでは9Bモデル2つを同時にGPUへ載せる余裕がありません。起動スクリプトは使用中ポートを検出し、停止スクリプトは記録したプロセスだけを停止します。
 
 ## ソースから実行
 
