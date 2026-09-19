@@ -1,0 +1,7 @@
+node_modules/
+dist/
+release/
+artifacts/
+.local/
+native/windows-files/bin/
+*.log

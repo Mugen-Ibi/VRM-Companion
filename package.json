@@ -1,0 +1,37 @@
+{
+  "name": "vrm-companion",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Local desktop companion for user-provided VRM avatars",
+  "license": "Unlicense",
+  "type": "module",
+  "main": "dist/main/index.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/start.mjs",
+    "dev": "node scripts/build.mjs && node scripts/start.mjs",
+    "setup": "node node_modules/electron/install.js",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.{ts,html,css}\" \"tests/**/*.ts\" \"scripts/*.{mjs,ts}\" package.json tsconfig.json",
+    "format:check": "prettier --check \"src/**/*.{ts,html,css}\" \"tests/**/*.ts\" \"scripts/*.{mjs,ts}\" package.json tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
+    "test:ui": "node scripts/smoke.mjs",
+    "package": "node scripts/package.mjs"
+  },
+  "dependencies": {
+    "@pixiv/three-vrm": "3.5.5",
+    "three": "^0.180.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "@types/node": "^24.0.0",
+    "@types/three": "^0.180.0",
+    "electron": "44.4.3",
+    "esbuild": "^0.25.0",
+    "playwright": "^1.55.0",
+    "prettier": "3.6.2",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}
