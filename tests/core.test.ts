@@ -117,3 +117,34 @@ test('chat reads fragmented UTF-8 SSE', async () => {
     server.close();
   }
 });
+
+test('VRM rejects malformed counts, accessor references and primitive modes before loading', () => {
+  const base = {
+    extensions: { VRMC_vrm: {} },
+    meshes: [{ primitives: [{ indices: 0 }, { indices: 1 }] }],
+  };
+  for (const count of [-900000, 1.5, '900000', null])
+    assert.throws(() =>
+      inspectVRM(glb({ ...base, accessors: [{ count: 900000 }, { count }] }), () => ({
+        width: 1,
+        height: 1,
+      })),
+    );
+  for (const primitive of [{ indices: 3 }, { indices: -1 }, { indices: 0, mode: 8 }, null])
+    assert.throws(() =>
+      inspectVRM(
+        glb({
+          extensions: { VRMC_vrm: {} },
+          accessors: [{ count: 3 }],
+          meshes: [{ primitives: [primitive] }],
+        }),
+        () => ({ width: 1, height: 1 }),
+      ),
+    );
+  assert.throws(() =>
+    inspectVRM(glb({ extensions: { VRMC_vrm: {} }, accessors: 'invalid' }), () => ({
+      width: 1,
+      height: 1,
+    })),
+  );
+});

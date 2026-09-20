@@ -209,6 +209,13 @@ function mainHarness() {
       senderFrame: avatarWindow.webContents.mainFrame,
     };
   return {
+    setOrganizer: (value: unknown) => {
+      (context as any).injected = value;
+      vm.runInContext('organizer=injected', context);
+    },
+    setMaintenance: (fn: () => Promise<unknown>) => {
+      context.runMaintenance = fn;
+    },
     store,
     files,
     timers,
@@ -431,3 +438,73 @@ test('status events never include the conversation or plan collections', async (
     assert.equal('conversations' in value.state, false);
   }
 });
+
+test('failed conversation writes change neither in-memory history nor title', async () => {
+  const h = mainHarness(),
+    id = await h.invoke('newConversation');
+  h.store.put = () => {
+    throw new Error('injected disk failure');
+  };
+  await assert.rejects(h.invoke('send', id, 'unsaved', 'chat'), /disk failure/);
+  const c = (await h.invoke('state')).conversations[0];
+  assert.equal(c.messages.length, 0);
+  assert.equal(c.title, '新しい会話');
+  await assert.rejects(h.invoke('newConversation'), /disk failure/);
+  assert.equal((await h.invoke('state')).conversations.length, 1);
+});
+
+test('failed avatar registration cleans its app-owned copy and retains the selected model', async () => {
+  const h = mainHarness(),
+    old = avatar('old'),
+    candidate = avatar('failed');
+  h.setSelected(old);
+  h.importNext(candidate);
+  await h.invoke('importAvatar');
+  const put = h.store.put.bind(h.store);
+  h.store.put = (bucket, id, value) => {
+    if (bucket === 'avatars') throw new Error('disk');
+    put(bucket, id, value);
+  };
+  h.report(candidate.id, true);
+  await nextTurn();
+  assert.equal(h.current().selectedId, old.id);
+  assert.equal(h.files.has(h.copyPath(candidate)), false);
+  assert.equal(h.store.get('avatars', candidate.id), undefined);
+});
+
+test('canceling root selection while registration waits does not attach the root', async () => {
+  const h = mainHarness(),
+    gate = deferred(),
+    id = await h.invoke('newConversation');
+  h.setOrganizer({
+    isRevoked: () => false,
+    register: async (_path: string, signal: AbortSignal) => {
+      await gate.promise;
+      assert.equal(signal.aborted, true);
+      return { id: randomUUID() };
+    },
+  });
+  const pending = h.invoke('selectRoot', id);
+  await nextTurn();
+  await h.invoke('cancel');
+  gate.resolve();
+  await assert.rejects(pending);
+  assert.equal((await h.invoke('state')).conversations[0].rootId, undefined);
+  assert.equal(h.current().phase, 'canceled');
+});
+
+for (const action of ['deleteConversation', 'clearHistory'])
+  test(`canceling ${action} during backup cleanup preserves live history`, async () => {
+    const h = mainHarness(),
+      gate = deferred(),
+      id = await h.invoke('newConversation');
+    h.setMaintenance(() => gate.promise);
+    const pending = h.invoke(action, id);
+    await nextTurn();
+    await h.invoke('cancel');
+    gate.resolve();
+    await assert.rejects(pending);
+    assert.equal((await h.invoke('state')).conversations[0].id, id);
+    assert.ok(h.store.get('conversations', id));
+    assert.equal(h.current().phase, 'canceled');
+  });

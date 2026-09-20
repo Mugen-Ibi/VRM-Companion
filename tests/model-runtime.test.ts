@@ -116,3 +116,48 @@ test('managed arguments bound parallelism and prompt cache and leave GPU fitting
   assert.equal(value('--fit'), 'on');
   assert.equal(value('--model'), 'D:\\models\\space name.gguf');
 });
+
+test('a change to a later GGUF shard restarts the owned model; unchanged shards reuse it', async () => {
+  const root = path.resolve('artifacts/split-runtime-' + Date.now());
+  await fs.mkdir(root, { recursive: true });
+  let launches = 0;
+  const runtime = new ModelRuntime(
+    () => {},
+    () => false,
+    ((_exe: string, args: string[], options: any) => {
+      launches++;
+      const port = args[args.indexOf('--port') + 1];
+      return spawn(
+        process.execPath,
+        [
+          '-e',
+          "require('http').createServer((q,r)=>{r.setHeader('Content-Type','application/json');r.end(JSON.stringify({data:[{id:'companion-local'}]}));}).listen(" +
+            port +
+            ",'127.0.0.1')",
+        ],
+        options,
+      );
+    }) as typeof spawn,
+  );
+  try {
+    await fs.writeFile(path.join(root, 'llama-server.exe'), 'mock launcher');
+    await fs.writeFile(path.join(root, 'split-00001-of-00002.gguf'), 'GGUF1111');
+    const second = path.join(root, 'split-00002-of-00002.gguf');
+    await fs.writeFile(second, 'GGUF2222');
+    const settings = {
+      ...DEFAULTS,
+      modelDirectory: root,
+      serverPath: path.join(root, 'llama-server.exe'),
+      managedModel: (await scanModels(root))[0].id,
+    };
+    await runtime.ensure(settings, new AbortController().signal);
+    await runtime.ensure(settings, new AbortController().signal);
+    assert.equal(launches, 1);
+    await fs.appendFile(second, 'changed');
+    await runtime.ensure(settings, new AbortController().signal);
+    assert.equal(launches, 2);
+    assert.equal(runtime.state.status, 'ready');
+  } finally {
+    await runtime.stop();
+  }
+});

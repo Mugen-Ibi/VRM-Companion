@@ -237,20 +237,27 @@ export class Organizer {
     this.progress(label, budget.bytes, budget.bytes);
     return identity;
   }
-  async register(folder: string): Promise<Root> {
+  async register(folder: string, signal?: AbortSignal): Promise<Root> {
+    signal?.throwIfAborted();
     // Application-owned state and source directories are never organization targets.
     this.assertUnprotected(folder);
     // Check the original spelling before resolving it, so aliases through reparse points stay forbidden.
-    const checked = await this.native.run<{ path: string; identity: string }>({
-      command: 'root',
-      root: folder,
-    });
+    const checked = await this.native.run<{ path: string; identity: string }>(
+      {
+        command: 'root',
+        root: folder,
+      },
+      signal,
+    );
     const canonical = await fs.realpath(checked.path);
-    const confirmed = await this.native.run<{ path: string; identity: string }>({
-      command: 'root',
-      root: canonical,
-      rootIdentity: checked.identity,
-    });
+    const confirmed = await this.native.run<{ path: string; identity: string }>(
+      {
+        command: 'root',
+        root: canonical,
+        rootIdentity: checked.identity,
+      },
+      signal,
+    );
     if (confirmed.identity !== checked.identity)
       throw new Error('確認中に対象フォルダが変わりました。もう一度選択してください。');
     const protectedPaths = await Promise.all(
@@ -266,6 +273,7 @@ export class Organizer {
       ),
     );
     this.assertUnprotected(canonical, protectedPaths);
+    signal?.throwIfAborted();
     const existing = this.records.roots.list().find((r) => r.identity === checked.identity);
     const root = existing ?? {
       id: randomUUID(),

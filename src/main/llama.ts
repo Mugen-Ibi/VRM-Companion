@@ -23,6 +23,23 @@ export function endpoint(input: string) {
   return url.origin;
 }
 type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+export function completedHistory(history: Message[]): ChatMessage[] {
+  const turns: { user: Message; replies: Message[] }[] = [];
+  for (const message of history) {
+    if (message.role === 'user') turns.push({ user: message, replies: [] });
+    else turns.at(-1)?.replies.push(message);
+  }
+  return turns.flatMap((turn, index) => {
+    if (turn.replies.some((m) => m.status === 'error')) return [];
+    if (!turn.replies.length && index !== turns.length - 1) return [];
+    return [
+      { role: 'user' as const, content: turn.user.content },
+      ...(turn.replies.length
+        ? [{ role: 'assistant' as const, content: turn.replies.map((m) => m.content).join('\n\n') }]
+        : []),
+    ];
+  });
+}
 const templateOptions = { enable_thinking: false };
 class HttpError extends Error {
   constructor(readonly status: number) {
@@ -254,12 +271,7 @@ export class Llama {
       role: 'system',
       content: `あなたの名前は${s.persona}。ユーザーの呼び名は${s.userName || '指定なし'}。${s.style}\n日本語で応答する。この通常会話経路にはファイル操作機能はない。ファイル作業を実行・完了したと主張しない。作業結果はアプリの実行記録カードを案内する。`,
     };
-    const allMessages: ChatMessage[] = [
-      system,
-      ...history
-        .filter((m) => m.status !== 'error')
-        .map((m) => ({ role: m.role, content: m.content })),
-    ];
+    const allMessages: ChatMessage[] = [system, ...completedHistory(history)];
     const controller = new AbortController();
     const requestSignal = AbortSignal.any([signal, controller.signal]);
     const total = setTimeout(() => controller.abort(), 180000);

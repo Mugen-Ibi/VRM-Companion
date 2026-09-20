@@ -379,3 +379,32 @@ test('an invalid successful token response is rejected instead of silently using
     ['/apply-template', '/tokenize'],
   );
 });
+
+test('a canceled turn is omitted as a unit and consecutive assistant records are combined', async (t) => {
+  const requests = mockServer(t);
+  await llama().chat(
+    [
+      user('good'),
+      { ...user('answer'), role: 'assistant' },
+      { ...user('operation record'), role: 'assistant' },
+      user('canceled request'),
+      { ...user('partial'), role: 'assistant', status: 'error' },
+      { ...user('error detail'), role: 'assistant', status: 'error' },
+      user('latest'),
+    ],
+    new AbortController().signal,
+    () => {},
+    () => {},
+  );
+  const messages = requests.find((r) => r.route === '/v1/chat/completions')!.body.messages;
+  assert.deepEqual(
+    messages.map((m: any) => m.role),
+    ['system', 'user', 'assistant', 'user'],
+  );
+  assert.equal(messages[2].content, 'answer\n\noperation record');
+  assert.equal(messages[3].content, 'latest');
+  assert.equal(
+    messages.some((m: any) => m.content === 'canceled request'),
+    false,
+  );
+});

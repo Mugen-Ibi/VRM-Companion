@@ -137,15 +137,21 @@ function conversation(id: string) {
 }
 function message(c: Conversation, role: Message['role'], content: string) {
   const m: Message = { id: randomUUID(), role, content, createdAt: Date.now() };
-  c.messages.push(m);
-  persist(c);
+  const next = {
+    ...c,
+    messages: [...c.messages, m],
+    title: role === 'user' && c.title === '新しい会話' ? content.slice(0, 30) : c.title,
+  };
+  if (settings.saveHistory) new Repositories(store).conversations.put(next);
+  Object.assign(c, next);
+  emit({ type: 'conversation', conversation: c });
   return m;
 }
 function newConversation() {
-  pending = null;
   const c: Conversation = { id: randomUUID(), title: '新しい会話', messages: [] };
-  conversations.push(c);
   persist(c);
+  conversations.push(c);
+  pending = null;
   return c.id;
 }
 function apiKey() {
@@ -566,12 +572,13 @@ function registerAPI() {
   });
   handle('deleteConversation', async (id: unknown) => {
     const value = idSchema.parse(id);
-    await task(async () => {
+    await task(async (signal) => {
       await runMaintenance(base, {
         kind: 'deleteBackupHistory',
         directory: store.directory,
         id: value,
       });
+      signal.throwIfAborted();
       store.deleteConversationRecord(value);
       conversations = conversations.filter((c) => c.id !== value);
       emit({ type: 'remove', collection: 'conversations', id: value });
@@ -580,8 +587,9 @@ function registerAPI() {
     }, 'idle');
   });
   handle('clearHistory', async () => {
-    await task(async () => {
+    await task(async (signal) => {
       await runMaintenance(base, { kind: 'deleteBackupHistory', directory: store.directory });
+      signal.throwIfAborted();
       store.deleteConversationRecord();
       conversations = [];
       emit({ type: 'clearConversations' });
@@ -593,10 +601,8 @@ function registerAPI() {
     const c = conversation(idSchema.parse(id)),
       input = textSchema.parse(text);
     idleOnly();
-    pending = null;
     message(c, 'user', input);
-    if (c.title === '新しい会話') c.title = input.slice(0, 30);
-    persist(c);
+    pending = null;
     await task(async (signal) => {
       try {
         await ensureModel(signal);
@@ -674,13 +680,15 @@ function registerAPI() {
   });
   handle('selectRoot', async (id: unknown) => {
     const c = conversation(idSchema.parse(id));
-    await task(async () => {
+    await task(async (signal) => {
       const result = await dialog.showOpenDialog(panel, {
         title: '整理対象の通常ローカルフォルダ（同期フォルダは未対応）',
         properties: ['openDirectory'],
       });
       if (result.canceled) return 'idle';
-      const root = await organizer.register(result.filePaths[0]);
+      signal.throwIfAborted();
+      const root = await organizer.register(result.filePaths[0], signal);
+      signal.throwIfAborted();
       c.rootId = root.id;
       if (pending?.conversationId === c.id) pending.needsTarget = false;
       persist(c);
@@ -978,6 +986,16 @@ function registerAPI() {
         broadcast();
       } catch (error) {
         preview = null;
+        // The registration transaction failed; remove only the app-owned candidate copy.
+        if (!store.get('avatars', candidate.id))
+          void fs
+            .rm(path.join(store.directory, 'avatars', candidate.id + '.vrm'), { force: true })
+            .catch(() =>
+              emit({
+                type: 'error',
+                message: '未登録モデルのコピーを削除できません。保存先を確認してください。',
+              }),
+            );
         emit({ type: 'error', message: 'モデルの保存に失敗しました。 ' + String(error) });
         broadcast();
       }

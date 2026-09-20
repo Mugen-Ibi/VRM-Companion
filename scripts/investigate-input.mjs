@@ -252,6 +252,46 @@ try {
     name: 'normal Enter, Shift+Enter, settings node identity and Undo',
     passed: true,
   });
+  await application.evaluate(({ app }) => {
+    app.setLoginItemSettings = () => {};
+  });
+  await page.locator('#api-key').fill('diagnostic-dummy-key');
+  await page.locator('[data-action="saveSettings"]').first().click();
+  await page.waitForFunction(
+    async () =>
+      (await window.companion.state()).hasApiKey && document.querySelector('#api-key').value === '',
+  );
+  await page.locator('#clear-key').check();
+  await page.locator('[data-action="saveSettings"]').first().click();
+  await page.waitForFunction(
+    async () =>
+      !(await window.companion.state()).hasApiKey && !document.querySelector('#clear-key').checked,
+  );
+  await page.locator('#api-key').fill('diagnostic-replacement-key');
+  await page.locator('[data-action="saveSettings"]').first().click();
+  await page.waitForFunction(
+    async () =>
+      (await window.companion.state()).hasApiKey && document.querySelector('#api-key').value === '',
+  );
+  results.push({
+    name: 'API key save, deletion and replacement reset one-shot fields',
+    passed: true,
+  });
+  await page.locator('[data-action="tab"][data-tab="chat"]').click();
+  await application.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('companion:send');
+    ipcMain.handle('companion:send', () => ({
+      ok: false,
+      error: 'diagnostic rejected before acceptance',
+    }));
+  });
+  await page.locator('#message-input').fill('unsent fixture');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(
+    () => document.querySelector('#toast').textContent === 'diagnostic rejected before acceptance',
+  );
+  assert.equal(await page.locator('#message-input').inputValue(), 'unsent fixture');
+  results.push({ name: 'pre-acceptance rejection retains the prompt', passed: true });
   results.push({ events: await page.evaluate(() => window.inputEvents) });
   await cdp.detach();
 } catch (error) {

@@ -392,7 +392,7 @@ test('non-finite bounds reject the candidate without losing the displayed model'
   assert.deepEqual(h.reports.at(-1), { id: 'B', ok: false });
 });
 
-function panelHarness(initial: Partial<State> = {}) {
+function panelHarness(initial: Partial<State> = {}, sendResult?: () => Promise<unknown>) {
   let document: any;
   const handlers = new Map<string, (event: any) => void>(),
     deleted: string[] = [],
@@ -519,7 +519,10 @@ function panelHarness(initial: Partial<State> = {}) {
     state: () => new Promise(() => {}),
     onEvent: (fn: (event: any) => void) => handlers.set('event', fn),
     deleteConversation: async (id: string) => deleted.push(id),
-    send: async (...args: unknown[]) => sent.push(args),
+    send: async (...args: unknown[]) => {
+      sent.push(args);
+      return sendResult?.();
+    },
     showAvatar: async () => visibilityCalls.push('show'),
     hideAvatar: async () => visibilityCalls.push('hide'),
   };
@@ -584,7 +587,7 @@ test('chat is the default and organization is an explicit choice preserved acros
   const h = panelHarness();
   h.run('suggest', { text: 'このフォルダを整理して' });
   h.run('send');
-  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(h.sent[0], ['conversation', 'このフォルダを整理して', 'chat']);
   h.run('sendMode', { mode: 'organize' });
   h.event({ type: 'update', state: { ...h.state, phase: 'success' } });
@@ -592,6 +595,50 @@ test('chat is the default and organization is an explicit choice preserved acros
   h.run('send');
   await Promise.resolve();
   assert.deepEqual(h.sent[1], ['conversation', 'このフォルダを種類別に整理して', 'organize']);
+});
+
+test('a rejected send retains the original draft and does not allow duplicate in-flight sends', async () => {
+  let reject!: (e: Error) => void;
+  const h = panelHarness(
+    {},
+    () =>
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      }),
+  );
+  h.run('suggest', { text: '未送信' });
+  h.run('send');
+  h.run('send');
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.draft(), '未送信');
+  reject(new Error('rejected'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.draft(), '未送信');
+  assert.equal(h.element('message-input').value, '未送信');
+});
+
+test('acceptance clears the submitted draft but never a newer edit', async () => {
+  let resolve!: () => void;
+  const h = panelHarness(
+    {},
+    () =>
+      new Promise<void>((done) => {
+        resolve = done;
+      }),
+  );
+  h.run('suggest', { text: '送信する文' });
+  h.run('send');
+  h.run('suggest', { text: '次の下書き' });
+  h.event({
+    type: 'conversation',
+    conversation: {
+      ...h.state.conversations[0],
+      messages: [{ id: 'accepted', role: 'user', content: '送信する文', createdAt: 0 }],
+    },
+  });
+  resolve();
+  await new Promise((done) => setImmediate(done));
+  assert.equal(h.draft(), '次の下書き');
 });
 test('retry restores the user input preceding the failed response and requires an explicit send', () => {
   const h = panelHarness({

@@ -1,6 +1,6 @@
 # VRM Companion
 
-現在の公開版は **[v0.0.0.4 Beta](https://github.com/Mugen-Ibi/VRM-Companion/releases/tag/v0.0.0.4)** です。承認済み設計のv0.1は後続の到達目標であり、このベータ版で全受け入れ条件の完了を宣言するものではありません。
+現在の公開版は **[v0.0.0.5 Beta](https://github.com/Mugen-Ibi/VRM-Companion/releases/tag/v0.0.0.5)** です。承認済み設計のv0.1は後続の到達目標であり、このベータ版で全受け入れ条件の完了を宣言するものではありません。
 
 ユーザーが用意した任意のVRMアバターと日本語で会話し、選択したフォルダの整理・復元を行うWindows用のローカルAIコンパニオンです。
 
@@ -8,7 +8,7 @@ MVPの実装とWindows向けパッケージを作成しました。検証結果�
 
 ## 起動
 
-配布ZIPを展開し、フォルダ内の `VRM-Companion.exe` を起動します。今回のビルドは `release/v0.0.0.4/VRM-Companion-win32-x64/VRM-Companion.exe` です。旧版が動作中の場合はトレイから終了してから起動してください。実行ファイルだけ移動せず、フォルダ全体を保持してください。Node.jsやUnityは実行時に不要です。
+配布ZIPを展開し、フォルダ内の `VRM-Companion.exe` を起動します。今回のビルドは `release/v0.0.0.5/VRM-Companion-win32-x64/VRM-Companion.exe` です。旧版が動作中の場合はトレイから終了してから起動してください。実行ファイルだけ移動せず、フォルダ全体を保持してください。Node.jsやUnityは実行時に不要です。
 
 1. 「アバター」から自分のVRMをインポートします。未選択でも会話と整理を使えます。
 2. 「設定」でLLMの使い方を選びます。「フォルダーから選択」ではGGUFフォルダーと `llama-server.exe` を指定して保存します。起動済みサーバーにも接続でき、接続先の初期値は `http://127.0.0.1:8080` です。
@@ -59,9 +59,9 @@ npm.cmd run package
 
 `package` は最新ソースのビルドと依存ライセンス生成も行います。UI試験は自作VRM・模擬サーバー・使い捨てファイルで行い、個人データを整理しません。ファイル試験はWindows NTFSが必要です。UI試験の整理対象はアプリ自身の保護範囲を避け、隣の `VRM-Companion-test-artifacts` に作ります。
 
-公開名・Gitタグ・Windows実行ファイルのバージョンは `package.json` の `releaseVersion`（現在 `0.0.0.3`）を使います。npm向けの `version` はSemVer形式の `0.0.3-beta.0` です。`COMPANION_PACKAGE_OUT` で出力先を指定でき、今回の配布用ビルドは `release/v0.0.0.4` に出力します。
+公開名・Gitタグ・Windows実行ファイルのバージョンは `package.json` の `releaseVersion`（現在 `0.0.0.3`）を使います。npm向けの `version` はSemVer形式の `0.0.3-beta.0` です。`COMPANION_PACKAGE_OUT` で出力先を指定でき、今回の配布用ビルドは `release/v0.0.0.5` に出力します。
 
-v0.0.0.4では設定保存の競合を修正し、通知を差分化しました。バックアップ・履歴削除のバックアップ処理・VRM検査はworkerで実行します。履歴は自動削除しません。詳細は [リリースノート](docs/release-v0.0.0.4.md) を参照してください。
+v0.0.0.5では設定保存の競合を修正し、通知を差分化しました。バックアップ・履歴削除のバックアップ処理・VRM検査はworkerで実行します。履歴は自動削除しません。詳細は [リリースノート](docs/release-v0.0.0.5.md) を参照してください。
 
 ## 実装範囲
 

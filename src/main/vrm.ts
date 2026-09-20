@@ -37,6 +37,16 @@ export function inspectVRM(
     offset += size;
   }
   if (offset !== bytes.length || !json) throw new Error('GLB構造が不正です。');
+  for (const field of ['buffers', 'images', 'bufferViews', 'meshes', 'accessors', 'nodes'] as const)
+    if (
+      json[field] !== undefined &&
+      (!Array.isArray(json[field]) ||
+        json[field]!.some((entry) => !entry || typeof entry !== 'object' || Array.isArray(entry)))
+    )
+      throw new Error('GLBメタデータの配列が不正です。');
+  for (const accessor of json.accessors ?? [])
+    if (!Number.isSafeInteger(accessor.count) || accessor.count < 0)
+      throw new Error('頂点・インデックス数が不正です。');
   const vrm1 = json.extensions?.VRMC_vrm,
     vrm0 = json.extensions?.VRM;
   if (!vrm1 && !vrm0) throw new Error('VRM 0.x / 1.0の拡張がありません。');
@@ -44,13 +54,28 @@ export function inspectVRM(
     throw new Error('外部参照やURI画像を含むVRMは未対応です。画像埋め込みで書き出してください。');
   if ((json.nodes?.length ?? 0) > 10000) throw new Error('ノード数が上限を超えています。');
   let triangles = 0;
-  for (const mesh of json.meshes ?? [])
-    for (const primitive of mesh.primitives ?? []) {
+  for (const mesh of json.meshes ?? []) {
+    if (!Array.isArray(mesh.primitives)) throw new Error('メッシュ構造が不正です。');
+    for (const primitive of mesh.primitives) {
+      if (!primitive || typeof primitive !== 'object') throw new Error('メッシュ構造が不正です。');
       if (primitive.extensions?.KHR_draco_mesh_compression)
         throw new Error('圧縮メッシュは未対応です。');
-      const n = json.accessors?.[primitive.indices ?? primitive.attributes?.POSITION]?.count ?? 0;
-      triangles += (primitive.mode ?? 4) === 4 ? n / 3 : n;
+      const index = primitive.indices ?? primitive.attributes?.POSITION;
+      const mode = primitive.mode ?? 4;
+      if (
+        !Number.isSafeInteger(index) ||
+        index < 0 ||
+        !json.accessors?.[index] ||
+        !Number.isInteger(mode) ||
+        mode < 0 ||
+        mode > 6
+      )
+        throw new Error('メッシュの参照・描画形式が不正です。');
+      const n = json.accessors[index].count;
+      triangles += mode === 4 ? Math.ceil(n / 3) : n;
+      if (triangles > 200000) throw new Error('三角形数20万の上限を超えています。');
     }
+  }
   if (triangles > 200000) throw new Error('三角形数20万の上限を超えています。');
   let decoded = 0;
   for (const img of json.images ?? []) {

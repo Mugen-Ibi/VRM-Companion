@@ -1,7 +1,7 @@
 {
   "name": "vrm-companion",
-  "version": "0.0.4-beta.0",
-  "releaseVersion": "0.0.0.4",
+  "version": "0.0.5-beta.0",
+  "releaseVersion": "0.0.0.5",
   "private": true,
   "description": "Local desktop companion for user-provided VRM avatars",
   "license": "Unlicense",

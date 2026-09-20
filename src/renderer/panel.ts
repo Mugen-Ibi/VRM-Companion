@@ -19,6 +19,9 @@ let settingsDraft: Map<string, FieldDraft> | null = null,
   composing = false,
   renderPending = false;
 const pages = new Map<string, number>();
+let draftVersion = 0,
+  sending = false,
+  acknowledgeSend: (() => void) | undefined;
 const esc = (value: unknown) =>
   String(value ?? '').replace(
     /[&<>"']/g,
@@ -106,6 +109,7 @@ function focusSnapshot() {
 }
 function render() {
   if (!state) return;
+  acknowledgeSend?.();
   if (composing) {
     renderPending = true;
     return;
@@ -182,7 +186,10 @@ function render() {
         send();
       }
     };
-    messageInput.oninput = () => (draft = messageInput.value);
+    messageInput.oninput = () => {
+      draft = messageInput.value;
+      draftVersion++;
+    };
   }
   const form = document.querySelector<HTMLFormElement>('#settings-form');
   if (form) {
@@ -324,16 +331,25 @@ async function saveSettings() {
   s.renderQuality = String(data.get('renderQuality')) as typeof s.renderQuality;
   for (const key of ['alwaysOnTop', 'autoStart', 'saveHistory'] as const) s[key] = data.has(key);
   const key = document.querySelector<HTMLInputElement>('#api-key')!.value;
-  state = await api.settings(
-    s,
-    document.querySelector<HTMLInputElement>('#clear-key')!.checked ? '' : key || undefined,
-  );
+  const clearKey = document.querySelector<HTMLInputElement>('#clear-key')!.checked;
+  state = await api.settings(s, clearKey ? '' : key || undefined);
+  const keyInput = document.querySelector<HTMLInputElement>('#api-key');
+  const clearInput = document.querySelector<HTMLInputElement>('#clear-key');
+  if (keyInput?.value === key) {
+    keyInput.value = '';
+    settingsDraft?.delete('api-key');
+  }
+  if (clearInput?.checked === clearKey) {
+    clearInput.checked = false;
+    settingsDraft?.delete('clear-key');
+  }
   if (version === settingsDraftVersion) settingsDraft = null;
   connected = false;
   render();
 }
 function fillComposer(text: string) {
   draft = text;
+  draftVersion++;
   render();
   const input = document.querySelector<HTMLTextAreaElement>('#message-input');
   if (input) input.value = text;
@@ -341,12 +357,38 @@ function fillComposer(text: string) {
   input?.setSelectionRange(text.length, text.length);
 }
 function send() {
-  if (composing || state.busy || !draft.trim()) return;
-  const text = draft;
-  draft = '';
-  const input = document.querySelector<HTMLTextAreaElement>('#message-input');
-  if (input) input.value = '';
-  action(() => api.send(conversationId, text, sendMode));
+  if (sending || composing || state.busy || !draft.trim()) return;
+  const text = draft,
+    id = conversationId,
+    version = draftVersion;
+  const existing = new Set(active().messages.map((m) => m.id));
+  let accepted = false;
+  const clearAccepted = () => {
+    if (accepted) return;
+    accepted = true;
+    if (draftVersion !== version || conversationId !== id) return;
+    draft = '';
+    const input = document.querySelector<HTMLTextAreaElement>('#message-input');
+    if (input) input.value = '';
+  };
+  acknowledgeSend = () => {
+    if (
+      state.conversations
+        .find((c) => c.id === id)
+        ?.messages.some((m) => m.role === 'user' && m.content === text && !existing.has(m.id))
+    )
+      clearAccepted();
+  };
+  sending = true;
+  void action(async () => {
+    try {
+      await api.send(id, text, sendMode);
+      clearAccepted();
+    } finally {
+      sending = false;
+      acknowledgeSend = undefined;
+    }
+  });
 }
 function run(el: HTMLElement) {
   const a = el.dataset.action,
@@ -550,6 +592,7 @@ app.addEventListener('change', (event) => {
 });
 app.addEventListener('compositionstart', () => {
   composing = true;
+  draftVersion++;
 });
 app.addEventListener('compositionend', () => {
   composing = false;

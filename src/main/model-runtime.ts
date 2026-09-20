@@ -92,6 +92,26 @@ async function availablePort(): Promise<number> {
   });
 }
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+async function modelSignature(file: string) {
+  const name = path.basename(file),
+    split = name.match(/^(.*)-00001-of-(\d{5})\.gguf$/i);
+  const count = split ? Number(split[2]) : 1;
+  if (count < 1 || count > 1000) throw new Error('分割モデルの構成が不正です。');
+  const parts = [];
+  for (let i = 1; i <= count; i++) {
+    const part = split
+      ? path.join(
+          path.dirname(file),
+          `${split[1]}-${String(i).padStart(5, '0')}-of-${split[2]}.gguf`,
+        )
+      : file;
+    const stat = await fs.lstat(part);
+    if (!stat.isFile() || stat.isSymbolicLink())
+      throw new Error('モデルの構成が変更されています。');
+    parts.push([part, stat.size, stat.mtimeMs, stat.ctimeMs]);
+  }
+  return parts;
+}
 
 export class ModelRuntime {
   state: LlmState = { models: [], status: 'unloaded', loadedModel: '' };
@@ -132,11 +152,8 @@ export class ModelRuntime {
     const file = await fs.realpath(path.join(root, selected.name));
     if (path.dirname(file).toLowerCase() !== root.toLowerCase())
       throw new Error('モデルの場所が変更されています。再読込してください。');
-    const stat = await fs.stat(file);
     const signature = JSON.stringify([
-      file,
-      stat.size,
-      stat.mtimeMs,
+      await modelSignature(file),
       settings.context,
       settings.serverPath,
     ]);

@@ -231,3 +231,20 @@ test('abort from real hash progress discards preparation and invalidates prior a
     await fs.rename(file, renamed);
     await fs.rename(renamed, file);
   }));
+
+test('canceled registration cannot restore revoked folder authority', async () => {
+  await fixture(async ({ organizer, store, native, dir, rootId }) => {
+    organizer.revoke(rootId);
+    const controller = new AbortController();
+    const run = native.run.bind(native);
+    let reads = 0;
+    native.run = async <T>(request: Record<string, unknown>, signal?: AbortSignal) => {
+      const result = await run<T>(request, signal);
+      if (request.command === 'root' && ++reads === 2) controller.abort();
+      return result;
+    };
+    await assert.rejects(organizer.register(dir, controller.signal));
+    assert.equal(organizer.isRevoked(rootId), true);
+    assert.equal(store.get<{ revoked: boolean }>('roots', rootId)!.revoked, true);
+  });
+});
