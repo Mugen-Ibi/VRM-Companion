@@ -416,6 +416,18 @@ function panelHarness(initial: Partial<State> = {}) {
     addEventListener(event: string, fn: (event: any) => void) {
       this.listeners.set(event, fn);
     }
+    set oninput(fn: (event: any) => void) {
+      this.listeners.set('input', fn);
+    }
+    set onkeydown(fn: (event: any) => void) {
+      this.listeners.set('keydown', fn);
+    }
+    set onchange(fn: (event: any) => void) {
+      this.listeners.set('change', fn);
+    }
+    set onsubmit(fn: (event: any) => void) {
+      this.listeners.set('submit', fn);
+    }
     getAttribute(name: string) {
       return name === 'name' ? this.name : null;
     }
@@ -515,6 +527,9 @@ function panelHarness(initial: Partial<State> = {}) {
     'panel.ts',
     {
       window: { companion: api },
+      updateDOM: (target: { innerHTML: string }, html: string) => {
+        target.innerHTML = html;
+      },
       document,
       HTMLElement: Element,
       HTMLInputElement: Input,
@@ -658,7 +673,7 @@ test('state updates preserve settings edits, checkbox values, focus and selectio
   assert.equal(h.element('persona').selectionEnd, 4);
   assert.equal(h.form.querySelectorAll().find((el) => el.name === 'saveHistory')!.checked, false);
 });
-test('IME composition defers a state redraw until composition finishes', async () => {
+test('IME composition defers a state redraw until composition finishes (render stub)', async () => {
   const h = panelHarness(),
     input = h.element('message-input');
   h.app.listeners.get('compositionstart')!({});
@@ -670,6 +685,22 @@ test('IME composition defers a state redraw until composition finishes', async (
   await Promise.resolve();
   assert.notEqual(h.element('message-input'), input);
   assert.equal(h.element('message-input').value, '変換中');
+});
+
+test('IME processing keys and composition never submit a prompt', () => {
+  const h = panelHarness();
+  h.run('suggest', { text: '変換確認' });
+  const keydown = h.element('message-input').listeners.get('keydown')!;
+  const preventDefault = () => {
+    throw new Error('IME key must not be consumed');
+  };
+  keydown({ key: 'Enter', keyCode: 229, isComposing: false, preventDefault });
+  keydown({ key: 'Enter', keyCode: 13, isComposing: true, preventDefault });
+  h.app.listeners.get('compositionstart')!({});
+  keydown({ key: 'Enter', keyCode: 13, isComposing: false, preventDefault });
+  h.run('send');
+  assert.equal(h.sent.length, 0);
+  assert.equal(h.draft(), '変換確認');
 });
 test('chat contains the current conversation plan and explicit approval controls', () => {
   const plan = {

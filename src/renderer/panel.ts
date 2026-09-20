@@ -1,5 +1,6 @@
 import { CATEGORIES, type State, type Plan, type Category, type Gesture } from '../shared/types';
 import { StateSync } from './state-sync';
+import { updateDOM } from './dom';
 const api = window.companion,
   app = document.querySelector<HTMLDivElement>('#app')!;
 let state: State,
@@ -82,7 +83,7 @@ function focusSnapshot() {
     entry = el.dataset.entry;
   const selection =
     el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
-      ? { start: el.selectionStart, end: el.selectionEnd }
+      ? { start: el.selectionStart, end: el.selectionEnd, direction: el.selectionDirection }
       : undefined;
   return () => {
     const next = id
@@ -92,6 +93,7 @@ function focusSnapshot() {
         : entry
           ? app.querySelector<HTMLElement>(`[data-entry="${entry}"]`)
           : null;
+    if (next === el && document.activeElement === el) return;
     next?.focus({ preventScroll: true });
     if (
       selection?.start !== null &&
@@ -99,7 +101,7 @@ function focusSnapshot() {
       selection.end !== null &&
       (next instanceof HTMLInputElement || next instanceof HTMLTextAreaElement)
     )
-      next.setSelectionRange(selection.start, selection.end);
+      next.setSelectionRange(selection.start, selection.end, selection.direction ?? undefined);
   };
 }
 function render() {
@@ -133,53 +135,55 @@ function render() {
         : tab === 'avatars'
           ? 'アバター'
           : '設定';
-  app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">c</span>Companion</div><div class="brand-sub">YOUR LOCAL SPACE</div><nav class="nav">${[
-    ['chat', '◌', '会話'],
-    ['organize', '▤', 'フォルダ整理'],
-    ['avatars', '◇', 'アバター'],
-    ['settings', '⚙', '設定'],
-  ]
-    .map(([id, icon, label]) =>
-      button(
-        `<span class="nav-icon">${icon}</span>${label}`,
-        'tab',
-        tab === id ? 'active' : '',
-        `data-tab="${id}"`,
-      ),
-    )
-    .join(
-      '',
-    )}</nav><div class="eyebrow sidebar-label">Conversations</div>${button('＋ 新しい会話', 'new', 'quiet small', disabled())}<div class="conversation-list">${[
-    ...state.conversations,
-  ]
-    .reverse()
-    .map((v) =>
-      button(
-        esc(v.title),
-        'conversation',
-        v.id === c.id ? 'selected' : '',
-        `data-id="${v.id}" ${disabled()}`,
-      ),
-    )
-    .join(
-      '',
-    )}</div><div class="sidebar-footer"><span class="dot"></span>ローカルで動作<br>あなたのPC、あなたの空間。</div></aside><main class="main"><header class="topbar"><div><h1>${title}</h1><div class="subtitle">${tab === 'chat' ? '日常のことも、小さなお手伝いも。' : tab === 'organize' ? '移動する前に、内容を一緒に確認。' : tab === 'avatars' ? 'あなたが選んだモデルを、デスクトップに。' : '会話と表示を、使いやすく。'}</div></div><div class="topbar-actions">${avatarVisibilityButton}<span class="pill">${phaseNames[state.phase]}</span></div></header><section class="content">${state.recoveryWarning ? `<div class="notice error" role="alert">${esc(state.recoveryWarning)}</div>` : ''}${tab === 'chat' ? chat(currentAvatar?.name) : tab === 'organize' ? organize() : tab === 'avatars' ? avatars() : settingsForm()}</section><footer class="statusline" id="progress">${esc(progress || 'VRM Companion · テキスト会話 / ローカル実行')}</footer></main></div>`;
+  updateDOM(
+    app,
+    `<div class="shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">c</span>Companion</div><div class="brand-sub">YOUR LOCAL SPACE</div><nav class="nav">${[
+      ['chat', '◌', '会話'],
+      ['organize', '▤', 'フォルダ整理'],
+      ['avatars', '◇', 'アバター'],
+      ['settings', '⚙', '設定'],
+    ]
+      .map(([id, icon, label]) =>
+        button(
+          `<span class="nav-icon">${icon}</span>${label}`,
+          'tab',
+          tab === id ? 'active' : '',
+          `data-tab="${id}"`,
+        ),
+      )
+      .join(
+        '',
+      )}</nav><div class="eyebrow sidebar-label">Conversations</div>${button('＋ 新しい会話', 'new', 'quiet small', disabled())}<div class="conversation-list">${[
+      ...state.conversations,
+    ]
+      .reverse()
+      .map((v) =>
+        button(
+          esc(v.title),
+          'conversation',
+          v.id === c.id ? 'selected' : '',
+          `data-id="${v.id}" ${disabled()}`,
+        ),
+      )
+      .join(
+        '',
+      )}</div><div class="sidebar-footer"><span class="dot"></span>ローカルで動作<br>あなたのPC、あなたの空間。</div></aside><main class="main"><header class="topbar"><div><h1>${title}</h1><div class="subtitle">${tab === 'chat' ? '日常のことも、小さなお手伝いも。' : tab === 'organize' ? '移動する前に、内容を一緒に確認。' : tab === 'avatars' ? 'あなたが選んだモデルを、デスクトップに。' : '会話と表示を、使いやすく。'}</div></div><div class="topbar-actions">${avatarVisibilityButton}<span class="pill">${phaseNames[state.phase]}</span></div></header><section class="content">${state.recoveryWarning ? `<div class="notice error" role="alert">${esc(state.recoveryWarning)}</div>` : ''}${tab === 'chat' ? chat(currentAvatar?.name) : tab === 'organize' ? organize() : tab === 'avatars' ? avatars() : settingsForm()}</section><footer class="statusline" id="progress">${esc(progress || 'VRM Companion · テキスト会話 / ローカル実行')}</footer></main></div>`,
+  );
   if (tab === 'chat') {
     const scroll = document.querySelector('.chat-scroll')!;
     scroll.scrollTop = keepScroll ?? scroll.scrollHeight;
   }
 
-  document
-    .querySelector<HTMLTextAreaElement>('#message-input')
-    ?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+  const messageInput = document.querySelector<HTMLTextAreaElement>('#message-input');
+  if (messageInput) {
+    messageInput.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !composing) {
         e.preventDefault();
         send();
       }
-    });
-  document
-    .querySelector<HTMLTextAreaElement>('#message-input')
-    ?.addEventListener('input', (e) => (draft = (e.target as HTMLTextAreaElement).value));
+    };
+    messageInput.oninput = () => (draft = messageInput.value);
+  }
   const form = document.querySelector<HTMLFormElement>('#settings-form');
   if (form) {
     form
@@ -189,20 +193,22 @@ function render() {
       .forEach((el) => {
         const saved = settingsDraft?.get(el.id || el.name);
         if (saved) {
-          el.value = saved.value;
+          if (el.value !== saved.value) el.value = saved.value;
           if (el instanceof HTMLInputElement) el.checked = saved.checked;
         }
       });
-    form.addEventListener('input', () => rememberSettings(form));
-    form.addEventListener('change', () => rememberSettings(form));
-    form.addEventListener('submit', (event) => {
+    form.oninput = () => rememberSettings(form);
+    form.onchange = () => rememberSettings(form);
+    form.onsubmit = (event) => {
       event.preventDefault();
       if (!state.busy) void action(saveSettings);
-    });
+    };
   }
-  document.querySelector<HTMLSelectElement>('#chat-model')?.addEventListener('change', (event) => {
-    void action(() => api.selectModel((event.target as HTMLSelectElement).value));
-  });
+  const modelSelect = document.querySelector<HTMLSelectElement>('#chat-model');
+  if (modelSelect)
+    modelSelect.onchange = () => {
+      void action(() => api.selectModel(modelSelect.value));
+    };
   restoreFocus?.();
 }
 function modelControls() {
@@ -330,11 +336,12 @@ function fillComposer(text: string) {
   draft = text;
   render();
   const input = document.querySelector<HTMLTextAreaElement>('#message-input');
+  if (input) input.value = text;
   input?.focus();
   input?.setSelectionRange(text.length, text.length);
 }
 function send() {
-  if (state.busy || !draft.trim()) return;
+  if (composing || state.busy || !draft.trim()) return;
   const text = draft;
   draft = '';
   const input = document.querySelector<HTMLTextAreaElement>('#message-input');
