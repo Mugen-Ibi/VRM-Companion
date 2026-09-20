@@ -7,6 +7,9 @@ import { randomUUID } from 'node:crypto';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { z } from 'zod';
+import { settingsSchema, mergeSettingsEdit } from '../src/main/settings';
+import { notifySafely } from '../src/main/notifications';
+import { Repositories } from '../src/main/repositories';
 import { DEFAULTS, CATEGORIES, type Avatar, type Phase } from '../src/shared/types';
 
 const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -66,6 +69,7 @@ function mainHarness() {
     importCandidate = avatar('Imported');
   const store = {
     directory: path.join(root, 'data'),
+    transaction: (fn: () => unknown) => fn(),
     get(bucket: string, id: string) {
       const value = records.get(bucket + ':' + id);
       return value === undefined ? undefined : structuredClone(value);
@@ -103,6 +107,7 @@ function mainHarness() {
           output.push({ channel, value: structuredClone(value) });
         },
       },
+      setAlwaysOnTop() {},
       isDestroyed: () => false,
       isVisible: () => visible,
       isMinimized: () => false,
@@ -146,6 +151,11 @@ function mainHarness() {
     path,
     fs,
     z,
+    settingsSchema,
+    mergeSettingsEdit,
+    notifySafely,
+    Repositories,
+    runMaintenance: async () => importCandidate,
     DEFAULTS,
     CATEGORIES,
     AbortController,
@@ -155,7 +165,12 @@ function mainHarness() {
     randomUUID,
     Buffer,
     console,
-    app: { getAppPath: () => root, isPackaged: true, commandLine: { getSwitchValue: () => '' } },
+    app: {
+      getAppPath: () => root,
+      isPackaged: true,
+      commandLine: { getSwitchValue: () => '' },
+      setLoginItemSettings() {},
+    },
     ipcMain,
     Llama: class {},
     endpoint() {},
@@ -177,7 +192,7 @@ function mainHarness() {
   });
   const expose = `globalThis.testMain={
     init(values){settings={...DEFAULTS};store=values.store;panel=values.panel;avatarWindow=values.avatarWindow;organizer={isRevoked:()=>false,journalFault:null};registerAPI();},
-    task,abort:()=>controller?.abort(),startPreview,
+    setRuntime:value=>{runtime=value;},task,abort:()=>controller?.abort(),startPreview,
     setSelected:id=>{settings={...settings,avatarId:id};store.put('settings','main',settings);},
     current:()=>({busy,controllerPresent:controller!==null,phase,previewId:preview?.id??null,selectedId:settings.avatarId,effectiveId:effectiveSettings().avatarId,avatarDialogOpen})
   };`;
@@ -201,6 +216,7 @@ function mainHarness() {
     panelEvents,
     avatarEvents,
     blockedRemovals,
+    setRuntime: (value: any) => context.testMain.setRuntime(value),
     current: () => context.testMain.current(),
     task: (fn: (signal: AbortSignal) => Promise<void | Phase>) =>
       context.testMain.task(fn) as Promise<void>,
@@ -252,21 +268,16 @@ test('drag holds hit testing, coalesces movement, keeps dimensions and releases 
   assert.equal(h.dragInfo().ignored, false, 'normal hover works again after drag');
 });
 
-test('task releases busy/controller after the initial state broadcast throws', async () => {
+test('display notification failure cannot fail a task or retain its lock', async () => {
   const h = mainHarness();
   let called = false;
   h.failBroadcast();
-  await assert.rejects(
-    h.task(async () => {
-      called = true;
-    }),
-    /initial broadcast failed/,
-  );
-  assert.equal(called, false);
+  await h.task(async () => {
+    called = true;
+  });
+  assert.equal(called, true);
   assert.equal(h.current().busy, false);
   assert.equal(h.current().controllerPresent, false);
-  assert.equal(h.current().phase, 'error');
-  await h.task(async () => {});
   assert.equal(h.current().phase, 'success');
 });
 test('avatar visibility stays controllable during a task and preserves model selection', async () => {
@@ -377,4 +388,46 @@ test('deleting a candidate while preview preparation awaits cleanup cannot resur
     h.avatarEvents.some((event) => event.value.settings.avatarId === candidate.id),
     false,
   );
+});
+
+test('settings commit preserves visibility and model changes made during an awaited stop', async () => {
+  const h = mainHarness(),
+    first = avatar('first'),
+    second = avatar('second'),
+    gate = deferred();
+  h.setSelected(first);
+  h.setRuntime({ stop: () => gate.promise, cancelIdle() {}, scheduleIdle() {} });
+  const next = { ...(await h.invoke('state')).settings, context: 8192 };
+  const saving = h.invoke('settings', next);
+  await nextTurn();
+  await h.invoke('hideAvatar');
+  h.setSelected(second);
+  gate.resolve();
+  await saving;
+  const state = await h.invoke('state');
+  assert.equal(state.settings.avatarVisible, false);
+  assert.equal(state.avatarVisible, false);
+  assert.equal(state.settings.avatarId, second.id);
+  assert.equal(state.settings.context, 8192);
+  assert.equal((h.store.get('settings', 'main') as typeof DEFAULTS).avatarId, second.id);
+});
+test('canceling a settings save while the model stops does not commit the edit', async () => {
+  const h = mainHarness(),
+    gate = deferred();
+  h.setRuntime({ stop: () => gate.promise, cancelIdle() {}, scheduleIdle() {} });
+  const saving = h.invoke('settings', { ...(await h.invoke('state')).settings, context: 8192 });
+  await nextTurn();
+  h.abort();
+  gate.resolve();
+  await assert.rejects(saving);
+  assert.equal((await h.invoke('state')).settings.context, DEFAULTS.context);
+});
+test('status events never include the conversation or plan collections', async () => {
+  const h = mainHarness();
+  await h.task(async () => {});
+  for (const { value } of h.panelEvents) {
+    assert.equal(value.type, 'update');
+    assert.equal('plans' in value.state, false);
+    assert.equal('conversations' in value.state, false);
+  }
 });

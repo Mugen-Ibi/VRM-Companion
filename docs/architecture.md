@@ -1,6 +1,6 @@
 # VRM-Companion 基本設計書
 
-作成・更新日: 2026-09-19 / 状態: 承認済み設計の実装反映版・受け入れ検証中 / 対応: [要件定義書](requirements.md)
+作成・更新日: 2026-09-20 / 状態: 承認済み設計の実装反映版・受け入れ検証中 / 対応: [要件定義書](requirements.md)
 
 本書は設計意図と現在の実装を記録する。承認済みの受け入れ条件は変更しない。実装済みであることと実機での合格は区別し、最新の結果と残る差分は[検証記録](verification.md)を参照する。
 
@@ -44,7 +44,7 @@ Electron Main（ウィンドウ管理、IPC送信元検証、認可）
 
 rendererはNode.js・シェル・任意パスへのアクセス権を持たない。Mainは`contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`を前提に、IPCの送信元ウィンドウ、フレーム、引数を検証する。アバター用ウィンドウに承認APIを公開しない。会話表示はプレーンテキストを基本とし、モデル出力をHTMLやスクリプトとして実行しない。[Electronセキュリティ指針](https://www.electronjs.org/docs/latest/tutorial/security)
 
-ローカル同梱コンテンツだけを読み込み、CSP、外部遷移・外部リソースの拒否を適用する。preloadで汎用`invoke(channel, args)`を公開せず、用途別メソッドに絞る。スキャン、ハッシュ計算、移動はC#製の補助プロセス`CompanionFiles.exe`で行う。DBはMain内の`node:sqlite` / `DatabaseSync`を使う。DB処理をworkerへ分離する当初案との差分であり、特にバックアップ時を含むUI応答性は検証対象とする。プロセス分割だけをOSのアクセス制限とは見なさず、アプリ側の検証を必須とする。
+ローカル同梱コンテンツだけを読み込み、CSP、外部遷移・外部リソースの拒否を適用する。preloadで汎用`invoke(channel, args)`を公開せず、用途別メソッドに絞る。スキャン、ハッシュ計算、移動はC#製の補助プロセス`CompanionFiles.exe`で行う。操作ジャーナルの短いDB更新はMain内の`node:sqlite` / `DatabaseSync`を使い、永続化完了を待ってから変更を実行する。`VACUUM INTO`と過去バックアップ内の会話削除は単発workerへ分離し、VRMのJSON・画像ヘッダー検査・SHA-256もworkerで行う。画像の寸法はデコード前に確認する。全DB処理をworker化した構成ではなく、起動時検査・通常の読書きはMainに残る。プロセス分割だけをOSのアクセス制限とは見なさず、アプリ側の検証を必須とする。
 
 上図のService、Router、Coordinatorは責務名である。実ファイルではウィンドウ／IPC／会話調停を`src/main/index.ts`、LLM通信と意図判定を`llama.ts`、整理計画・実行・復旧を`files.ts`、保存を`store.ts`に実装している。詳細な対応は第8節に示す。
 
@@ -98,7 +98,7 @@ LLMバイナリ・モデルの同梱、ダウンロード、GPUバックエン�
 
 会話はsystem（人格と応答規則）、直近履歴、現在入力を基本とする。モデルのコンテキスト上限から生成予約分を除き、古い履歴から外す。履歴の省略をUIに表示する。初期版は自動要約・ベクトルDBを必須にせず、会話履歴と恒久的な記憶を区別する。
 
-同時生成は1件。Mainの`busy`で同時ジョブを拒否し、意図判定から通常応答を直列に呼ぶ。分類・計画生成自体はLLMを呼ばない。現実装は接続確認全体15秒、意図判定全体60秒、通常応答の最初の通信60秒・受信後の無通信30秒・全体180秒。当初案の接続5秒およびUIからのタイムアウト変更は未実装の差分として残る。ネットワーク障害では変更操作を自動再試行しない。生成時は`chat_template_kwargs.enable_thinking=false`を渡す。
+同時生成は1件。Mainの`busy`で同時ジョブを拒否する。通常の「会話」は直接応答を生成し、利用者が選んだ「整理依頼」だけ意図判定を行う。整理依頼でchatと判定された場合は通常応答を続ける。分類・計画生成自体はLLMを呼ばない。現実装は接続確認全体15秒、意図判定全体60秒、通常応答の最初の通信60秒・受信後の無通信30秒・全体180秒。当初案の接続5秒およびUIからのタイムアウト変更は未実装の差分として残る。ネットワーク障害では変更操作を自動再試行しない。生成時は`chat_template_kwargs.enable_thinking=false`を渡す。
 
 ### 構造化出力
 
@@ -108,7 +108,7 @@ JSON修復の再生成は1回まで。それでも失敗したら依頼を開始
 
 ### 会話から整理への契約
 
-`window.companion.send(conversationId, text)`はMain側のIntent Routerへ渡る。意図判定中のJSONや説明文はチャットに逐次表示しない。判定スキーマは`{ intent: chat | organize | clarify | unsupported, method: by_extension | null, target: selected | unspecified | other }`とし、Zodのstrict schemaで追加キーや不正な値を拒否する。LLMにrootId、絶対パス、承認情報を生成させない。
+`window.companion.send(conversationId, text, mode?)`は`chat`（省略時）と`organize`をMainで検証する。`chat`は通常応答へ直接渡し、`organize`だけIntent Routerへ渡る。意図判定中のJSONや説明文はチャットに逐次表示しない。判定スキーマは`{ intent: chat | organize | clarify | unsupported, method: by_extension | null, target: selected | unspecified | other }`とし、Zodのstrict schemaで追加キーや不正な値を拒否する。LLMにrootId、絶対パス、承認情報を生成させない。
 
 | 分岐 | 処理 |
 | --- | --- |
@@ -221,7 +221,7 @@ Panelでは`window.companion`を公開する。設計時の`avatar.* / chat.* / 
 | --- | --- |
 | `state()` / `settings(value, key?)` / `connect()` | 状態取得、検証付き設定保存、接続確認 |
 | `importAvatar()` / `selectAvatar(id)` / `deleteAvatar(id)` | VRM選択ダイアログ、登録済みモデルの切替・削除 |
-| `send(conversationId, text)` / `cancel()` | 意図判定・通常会話・検証中断。単一の稼働ジョブを停止 |
+| `send(conversationId, text, mode?)` / `cancel()` | 通常会話、明示した整理依頼の意図判定、検証中断。単一の稼働ジョブを停止 |
 | `newConversation()` / `deleteConversation(id)` / `clearHistory()` | 会話の作成・削除 |
 | `resolvePending(id)` / `dismissPending()` | 同じ確認待ち依頼の再開・破棄 |
 | `selectRoot(conversationId)` / `chooseRoot(conversationId, rootId)` / `revokeRoot(rootId)` | フォルダ選択ダイアログ、登録済み対象の選択、許可解除 |
@@ -234,9 +234,11 @@ Panelでは`window.companion`を公開する。設計時の`avatar.* / chat.* / 
 
 Avatar側は`window.avatarHost`の`state / bytes / hit / openPanel / drag / report / onUpdate`に限定する。任意のウィンドウ指定や承認APIは公開しない。入力モード変更はMainのトレイメニューに置く。
 
-Panelイベントは`companion:event`上の`state / delta / progress / error`で、完了・確認待ち・計画結果は状態スナップショットに含める。`delta`にconversationId／messageId、`progress`に説明とdone／totalを付ける。当初案のイベントごとの連番は採用せず、単一ジョブと会話・メッセージIDで混入を防ぐ。Avatarは`avatar:update`のsettings／phase／visibleとモデルロードの世代番号を使う。
+Panelイベントは`companion:event`上の`update / conversation / plan / remove / clearConversations / delta / progress / error`と、再同期用の`state`である。頻繁な`update`には全会話・全計画を含めず、変更した会話・計画だけ別イベントで送る。全イベントに連番を付け、rendererは欠落を検出すると`state()`で再取得する。初期取得中のイベントを保留し、スナップショットに取り込み済みのdeltaを二重適用しない。パネルの再表示でも全状態を送る。画面通知の失敗は永続化や実行結果と切り離す。Avatarは`avatar:update`のsettings／phase／visibleとモデルロードの世代番号を使う。
 
-会話保存無効時は新しい会話の更新をメモリ上だけに保持し、既存の保存履歴を消すには履歴削除を行う。一方、変更操作の復旧ジャーナルは必須であり無効化しない。作業履歴は自動削除せず、削除時は復元できなくなる範囲を表示する。未解決の復旧記録は削除対象にしない。スキーマ版は`user_version=1`で管理し、既存の旧スキーマを更新する前にはDBバックアップを作成する。新しい未知のスキーマを勝手に開き直さない。
+通常会話の表示は100メッセージ単位、整理記録は10計画単位。更新中の計画カードだけを差し替える。DBの初期読込み・初期IPCスナップショットは引き続き全件であり、サーバー側のページ取得や履歴の遅延読込みは今後の大規模データ対策として残る。
+
+会話保存無効時は新しい会話の更新をメモリ上だけに保持し、既存の保存履歴を消すには履歴削除を行う。一方、変更操作の復旧ジャーナルは必須であり無効化しない。作業履歴は自動削除せず、削除時は復元できなくなる範囲を表示する。未解決の復旧記録は削除対象にしない。会話・許可・計画・アバターに型付きRepositoryとZod検証を導入し、起動とバックアップ復元前にレコード形状・IDを確認する。不正レコードを黙って削除・補正しない。設定とAPIキー、アバター登録と選択は各々SQLiteトランザクションでまとめる。非同期の設定保存は待機後の最新状態へ編集項目をマージし、表示・選択・位置など専用操作の変更を保持する。保存形式は互換のままで、スキーマ版は`user_version=1`で管理し、既存の旧スキーマを更新する前にはDBバックアップを作成する。新しい未知のスキーマを勝手に開き直さない。
 
 ### 7.1 バックアップと破損時の復元
 
@@ -253,11 +255,17 @@ src/
   main/index.ts       # Electron起動、トレイ、ウィンドウ、IPC、会話調停
   main/llama.ts       # 文脈、意図判定、HTTP、SSE
   main/files.ts       # 固定分類、計画、権限、承認、実行、復旧
-  main/store.ts       # SQLite、バックアップ、オフライン復元
+  main/store.ts       # SQLite、トランザクション、オフライン復元
+  main/repositories.ts # 永続レコードの型・検証
+  main/settings.ts    # 設定スキーマ、保存時のマージ
+  main/maintenance.ts # worker起動・終了・期限管理
+  main/maintenance-worker.ts # DB保守、VRM検査
+  main/notifications.ts # 通知失敗の隔離
   main/vrm.ts         # GLB／VRM入力検査、メタ情報
   preload/            # panel.ts、avatar.tsの限定API
   renderer/avatar.ts  # Three.js、VRM、入力判定、表情
-  renderer/panel.ts   # 会話、設定、整理案・結果
+  renderer/panel.ts   # 会話、設定、整理案・結果、表示ページ
+  renderer/state-sync.ts # 通知連番、欠落検出、再同期
   renderer/           # HTML、CSS
   shared/types.ts     # 設定・計画・IPC・イベントの型
 native/windows-files/

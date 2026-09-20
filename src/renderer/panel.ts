@@ -1,8 +1,12 @@
 import { CATEGORIES, type State, type Plan, type Category, type Gesture } from '../shared/types';
+import { StateSync } from './state-sync';
 const api = window.companion,
   app = document.querySelector<HTMLDivElement>('#app')!;
 let state: State,
   tab = 'chat',
+  sendMode: 'chat' | 'organize' = 'chat',
+  planPage = 0,
+  messageLimit = 100,
   conversationId = '',
   draft = '',
   progress = '',
@@ -112,6 +116,7 @@ function render() {
       ? oldScroll.scrollTop
       : null;
   const c = active();
+  if (!c) return;
   conversationId = c.id;
   const currentAvatar = state.avatars.find((a) => a.id === state.settings.avatarId);
   const avatarVisibilityButton = button(
@@ -163,9 +168,7 @@ function render() {
     const scroll = document.querySelector('.chat-scroll')!;
     scroll.scrollTop = keepScroll ?? scroll.scrollHeight;
   }
-  app
-    .querySelectorAll<HTMLElement>('[data-action]')
-    .forEach((el) => el.addEventListener('click', () => run(el)));
+
   document
     .querySelector<HTMLTextAreaElement>('#message-input')
     ?.addEventListener('keydown', (e) => {
@@ -177,15 +180,6 @@ function render() {
   document
     .querySelector<HTMLTextAreaElement>('#message-input')
     ?.addEventListener('input', (e) => (draft = (e.target as HTMLTextAreaElement).value));
-  app.querySelectorAll<HTMLSelectElement>('[data-entry]').forEach((el) =>
-    el.addEventListener('change', () =>
-      action(() =>
-        api.editPlan(el.dataset.plan!, Number(el.dataset.rev), {
-          [el.dataset.entry!]: el.value as Category,
-        }),
-      ),
-    ),
-  );
   const form = document.querySelector<HTMLFormElement>('#settings-form');
   if (form) {
     form
@@ -243,12 +237,22 @@ function localSettings() {
 function chat(avatarName?: string) {
   const c = active(),
     root = state.roots.find((r) => r.id === c.rootId && !r.revoked);
-  return `<div class="chat-layout"><div class="chat-main"><div class="conversation-toolbar">${modelControls()}${button('この会話を削除', 'deleteConversation', 'quiet small danger', `data-id="${c.id}" ${disabled()}`)}</div><div class="chat-scroll">${c.messages.length ? c.messages.map((m) => `<article class="message ${m.role} ${m.status === 'error' ? 'error' : ''}" data-message="${m.id}"><div class="author">${m.role === 'user' ? 'YOU' : esc(state.settings.persona)}</div><div class="message-text">${esc(m.content || '…')}</div>${m.status === 'error' ? button('前の入力を再入力', 'retryInput', 'quiet small', `data-id="${m.id}" ${disabled()}`) : ''}</article>`).join('') : `<div class="welcome"><span class="welcome-mark">✳</span><div class="eyebrow">A little company, on your desktop</div><h2>いつものデスクに、<br>もうひとつの居場所。</h2><p>好きなアバターと話したり、ファイルを整えたり。<br>まずはローカルLLMに接続して、ひとこと話しかけてみましょう。</p><div class="suggestions">${button('こんにちは', 'suggest', '', 'data-text="こんにちは"')}${button('今日の作業を一緒に考えて', 'suggest', '', 'data-text="今日の作業を一緒に考えて"')}</div></div>`}${state.pending?.conversationId === c.id ? `<div class="notice">${esc(state.pending.reason)}<div class="actions">${button('対象フォルダを選ぶ', 'selectRoot', 'small', disabled())}${button('種類別整理の案を作る', 'resolve', 'primary small', disabled())}${button('キャンセル', 'dismiss', 'quiet small')}</div></div>` : ''}${conversationPlans(c.id)}</div><div class="composer"><textarea id="message-input" aria-label="メッセージ" placeholder="メッセージを入力…" maxlength="6000">${esc(draft)}</textarea><div class="composer-bottom"><span>Enterで送信 · Shift+Enterで改行</span>${state.busy ? button('停止', 'cancel', 'danger') : button('送信 ↗', 'send', 'primary')}</div></div></div><aside><div class="aside-card"><div class="eyebrow">Your companion</div><div class="avatar-empty"><div class="orb"></div></div><h3>${esc(avatarName || 'あなたのVRMを選ぶ')}</h3><p>${avatarName ? 'モデルはデスクトップに表示されます。位置はドラッグで調整できます。' : 'モデルの探索・入手はユーザー自身で。対応するVRM 0.x / 1.0を読み込めます。'}</p>${button(avatarName ? 'デスクトップに表示' : 'VRMをインポート', avatarName ? 'showAvatar' : 'importAvatar', '', disabled())}</div><div class="aside-card"><div class="eyebrow">Workspace</div><h3>${root ? '整理対象を選択済み' : 'フォルダのお手伝い'}</h3><p>${esc(root?.path || '指定したフォルダの直下を種類別に。確認してから移動します。')}</p>${button('フォルダを選択', 'selectRoot', '', disabled())}${button('整理案を作る', 'propose', 'secondary-button', disabled())}</div><div class="setup-step"><b>${connected ? '●' : '○'}</b>${connected ? 'ローカルLLM接続済み' : '設定からLLMの接続を確認'}</div></aside></div>`;
+  return `<div class="chat-layout"><div class="chat-main"><div class="conversation-toolbar">${modelControls()}${button('この会話を削除', 'deleteConversation', 'quiet small danger', `data-id="${c.id}" ${disabled()}`)}</div><div class="chat-scroll">${c.messages.length > messageLimit ? button('以前のメッセージを表示', 'olderMessages', 'quiet small') : ''}${
+    c.messages.length
+      ? c.messages
+          .slice(-messageLimit)
+          .map(
+            (m) =>
+              `<article class="message ${m.role} ${m.status === 'error' ? 'error' : ''}" data-message="${m.id}"><div class="author">${m.role === 'user' ? 'YOU' : esc(state.settings.persona)}</div><div class="message-text">${esc(m.content || '…')}</div>${m.status === 'error' ? button('前の入力を再入力', 'retryInput', 'quiet small', `data-id="${m.id}" ${disabled()}`) : ''}</article>`,
+          )
+          .join('')
+      : `<div class="welcome"><span class="welcome-mark">✳</span><div class="eyebrow">A little company, on your desktop</div><h2>いつものデスクに、<br>もうひとつの居場所。</h2><p>好きなアバターと話したり、ファイルを整えたり。<br>まずはローカルLLMに接続して、ひとこと話しかけてみましょう。</p><div class="suggestions">${button('こんにちは', 'suggest', '', 'data-text="こんにちは"')}${button('今日の作業を一緒に考えて', 'suggest', '', 'data-text="今日の作業を一緒に考えて"')}</div></div>`
+  }${state.pending?.conversationId === c.id ? `<div class="notice">${esc(state.pending.reason)}<div class="actions">${button('対象フォルダを選ぶ', 'selectRoot', 'small', disabled())}${button('種類別整理の案を作る', 'resolve', 'primary small', disabled())}${button('キャンセル', 'dismiss', 'quiet small')}</div></div>` : ''}${conversationPlans(c.id)}</div><div class="composer"><div class="compose-modes" role="group" aria-label="送信の種類">${button('会話', 'sendMode', sendMode === 'chat' ? 'selected' : 'quiet', `data-mode="chat" aria-pressed="${sendMode === 'chat'}"`)}${button('整理依頼', 'sendMode', sendMode === 'organize' ? 'selected' : 'quiet', `data-mode="organize" aria-pressed="${sendMode === 'organize'}"`)}</div><p class="compose-hint">${sendMode === 'chat' ? '会話モードではファイルを操作しません。整理するときは「整理依頼」を選択してください。' : '対象と整理方法を確認して案を作ります。ファイルの移動には別途承認が必要です。'}</p><textarea id="message-input" aria-label="メッセージ" placeholder="メッセージを入力…" maxlength="6000">${esc(draft)}</textarea><div class="composer-bottom"><span>Enterで送信 · Shift+Enterで改行</span>${state.busy ? button('停止', 'cancel', 'danger') : button('送信 ↗', 'send', 'primary')}</div></div></div><aside><div class="aside-card"><div class="eyebrow">Your companion</div><div class="avatar-empty"><div class="orb"></div></div><h3>${esc(avatarName || 'あなたのVRMを選ぶ')}</h3><p>${avatarName ? 'モデルはデスクトップに表示されます。位置はドラッグで調整できます。' : 'モデルの探索・入手はユーザー自身で。対応するVRM 0.x / 1.0を読み込めます。'}</p>${button(avatarName ? 'デスクトップに表示' : 'VRMをインポート', avatarName ? 'showAvatar' : 'importAvatar', '', disabled())}</div><div class="aside-card"><div class="eyebrow">Workspace</div><h3>${root ? '整理対象を選択済み' : 'フォルダのお手伝い'}</h3><p>${esc(root?.path || '指定したフォルダの直下を種類別に。確認してから移動します。')}</p>${button('フォルダを選択', 'selectRoot', '', disabled())}${button('整理案を作る', 'propose', 'secondary-button', disabled())}</div><div class="setup-step"><b>${connected ? '●' : '○'}</b>${connected ? 'ローカルLLM接続済み' : '設定からLLMの接続を確認'}</div></aside></div>`;
 }
 function organize() {
   const c = active();
   const roots = state.roots.filter((r) => !r.revoked);
-  return `<div class="section-heading"><h2>整理のワークスペース</h2>${button('＋ 対象フォルダ', 'selectRoot', '', disabled())}</div><p class="muted">直下のファイルを拡張子で分類します。元の名前を保ち、同名ファイルは上書きしません。</p><div class="card"><div class="eyebrow">Selected folders</div>${roots.length ? roots.map((r) => `<div class="root-row row spread"><span class="path">${esc(r.path)} ${r.id === c.rootId ? '✓' : ''}</span><span>${button('選択', 'chooseRoot', 'small', `data-id="${r.id}" ${disabled()}`)} ${button('許可解除', 'revokeRoot', 'small quiet danger', `data-id="${r.id}"`)}</span></div>`).join('') : '<p class="muted">対象フォルダはまだありません。通常のローカルNTFSフォルダを選択してください。</p>'}<div class="actions">${button('種類別の整理案を作成', 'propose', 'primary', disabled())}${state.busy ? button('処理を停止', 'cancel', 'danger') : ''}</div></div>${state.plans.some((p) => p.status === 'recovery') || state.recoveryWarning ? `<div class="notice error">前回の作業に未確定の項目があります。実行記録とファイルの状態を照合してください。<div class="actions">${button('状態を照合する', 'recover', '', disabled())}</div></div>` : ''}${state.plans.length ? state.plans.map(planCard).join('') : '<div class="empty-state"><div class="welcome-mark">▤</div><h3>まだ何も変更していません</h3><p class="muted">フォルダを選ぶと、ここに整理案が表示されます。<br>移動前にすべての変更を確認できます。</p></div>'}`;
+  return `<div class="section-heading"><h2>整理のワークスペース</h2>${button('＋ 対象フォルダ', 'selectRoot', '', disabled())}</div><p class="muted">直下のファイルを拡張子で分類します。元の名前を保ち、同名ファイルは上書きしません。</p><div class="card"><div class="eyebrow">Selected folders</div>${roots.length ? roots.map((r) => `<div class="root-row row spread"><span class="path">${esc(r.path)} ${r.id === c.rootId ? '✓' : ''}</span><span>${button('選択', 'chooseRoot', 'small', `data-id="${r.id}" ${disabled()}`)} ${button('許可解除', 'revokeRoot', 'small quiet danger', `data-id="${r.id}"`)}</span></div>`).join('') : '<p class="muted">対象フォルダはまだありません。通常のローカルNTFSフォルダを選択してください。</p>'}<div class="actions">${button('種類別の整理案を作成', 'propose', 'primary', disabled())}${state.busy ? button('処理を停止', 'cancel', 'danger') : ''}</div></div>${state.plans.some((p) => p.status === 'recovery') || state.recoveryWarning ? `<div class="notice error">前回の作業に未確定の項目があります。実行記録とファイルの状態を照合してください。<div class="actions">${button('状態を照合する', 'recover', '', disabled())}</div></div>` : ''}${state.plans.length ? planList() : '<div class="empty-state"><div class="welcome-mark">▤</div><h3>まだ何も変更していません</h3><p class="muted">フォルダを選ぶと、ここに整理案が表示されます。<br>移動前にすべての変更を確認できます。</p></div>'}`;
 }
 const statuses: Record<Plan['status'], string> = {
   draft: '未検証',
@@ -267,7 +271,7 @@ function planCard(p: Plan) {
   const editable = ['draft', 'ready', 'stale'].includes(p.status) && !p.undoOf;
   const page = pages.get(p.id) || 0;
   const entries = p.entries.slice(page * 50, (page + 1) * 50);
-  return `<div class="card"><div class="row spread"><div class="plan-title">${p.undoOf ? '元の場所へ戻す' : '種類別に整える'}<span class="tag">${statuses[p.status]}</span></div><span class="muted">${new Date(p.createdAt).toLocaleString('ja-JP')}</span></div><p class="path">${esc(root?.path || '許可解除済み')}</p><p class="muted">候補 ${p.entries.filter((e) => !e.excluded && e.category !== '変更なし').length}件 · ${bytes(p.totalBytes)} · 1ファイル512MiB / 合計2GiB / 200件まで</p>${p.error ? `<div class="notice error">${esc(p.error)}</div>` : ''}${editable ? `<div class="table-wrap"><table><thead><tr><th>ファイル / 理由</th><th>サイズ</th><th>移動先</th></tr></thead><tbody>${entries.map((e) => `<tr><td>${esc(e.name)}<div class="reason">${esc(e.reason)}</div></td><td>${bytes(e.size)}</td><td><select aria-label="${esc(e.name)}の分類" data-entry="${e.id}" data-plan="${p.id}" data-rev="${p.revision}" ${e.excluded || state.busy ? 'disabled' : ''}>${CATEGORIES.map((cat) => `<option ${cat === e.category ? 'selected' : ''}>${cat}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table></div><div class="row spread"><span class="muted">${Math.min(page * 50 + 1, p.entries.length)}–${Math.min((page + 1) * 50, p.entries.length)} / ${p.entries.length}</span><span>${button('前へ', 'page', 'small quiet', `data-id="${p.id}" data-page="${page - 1}" ${page === 0 ? 'disabled' : ''}`)}${button('次へ', 'page', 'small quiet', `data-id="${p.id}" data-page="${page + 1}" ${(page + 1) * 50 >= p.entries.length ? 'disabled' : ''}`)}</span></div>` : ''}${p.operations.length ? `<div class="table-wrap"><table><thead><tr><th>移動元</th><th>移動先</th><th>状態</th></tr></thead><tbody>${p.operations.map((o) => `<tr><td>${esc(o.from || 'フォルダ作成')}</td><td>${esc(o.to)}</td><td>${esc({ pending: '未実行', intent: '実行記録あり', done: '完了', failed: '失敗', unresolved: '未確定', unverified: '成否未確定・手動確認済み' }[o.state])}${o.error ? `<div class="reason">${esc(o.error)}</div>` : ''}</td></tr>`).join('')}</tbody></table></div>` : ''}${
+  return `<div class="card" data-plan-card="${p.id}"><div class="row spread"><div class="plan-title">${p.undoOf ? '元の場所へ戻す' : '種類別に整える'}<span class="tag">${statuses[p.status]}</span></div><span class="muted">${new Date(p.createdAt).toLocaleString('ja-JP')}</span></div><p class="path">${esc(root?.path || '許可解除済み')}</p><p class="muted">候補 ${p.entries.filter((e) => !e.excluded && e.category !== '変更なし').length}件 · ${bytes(p.totalBytes)} · 1ファイル512MiB / 合計2GiB / 200件まで</p>${p.error ? `<div class="notice error">${esc(p.error)}</div>` : ''}${editable ? `<div class="table-wrap"><table><thead><tr><th>ファイル / 理由</th><th>サイズ</th><th>移動先</th></tr></thead><tbody>${entries.map((e) => `<tr><td>${esc(e.name)}<div class="reason">${esc(e.reason)}</div></td><td>${bytes(e.size)}</td><td><select aria-label="${esc(e.name)}の分類" data-entry="${e.id}" data-plan="${p.id}" data-rev="${p.revision}" ${e.excluded || state.busy ? 'disabled' : ''}>${CATEGORIES.map((cat) => `<option ${cat === e.category ? 'selected' : ''}>${cat}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table></div><div class="row spread"><span class="muted">${Math.min(page * 50 + 1, p.entries.length)}–${Math.min((page + 1) * 50, p.entries.length)} / ${p.entries.length}</span><span>${button('前へ', 'page', 'small quiet', `data-id="${p.id}" data-page="${page - 1}" ${page === 0 ? 'disabled' : ''}`)}${button('次へ', 'page', 'small quiet', `data-id="${p.id}" data-page="${page + 1}" ${(page + 1) * 50 >= p.entries.length ? 'disabled' : ''}`)}</span></div>` : ''}${p.operations.length ? `<div class="table-wrap"><table><thead><tr><th>移動元</th><th>移動先</th><th>状態</th></tr></thead><tbody>${p.operations.map((o) => `<tr><td>${esc(o.from || 'フォルダ作成')}</td><td>${esc(o.to)}</td><td>${esc({ pending: '未実行', intent: '実行記録あり', done: '完了', failed: '失敗', unresolved: '未確定', unverified: '成否未確定・手動確認済み' }[o.state])}${o.error ? `<div class="reason">${esc(o.error)}</div>` : ''}</td></tr>`).join('')}</tbody></table></div>` : ''}${
     p.undoOf
       ? p.entries
           .filter((e) => e.excluded)
@@ -335,11 +339,26 @@ function send() {
   draft = '';
   const input = document.querySelector<HTMLTextAreaElement>('#message-input');
   if (input) input.value = '';
-  action(() => api.send(conversationId, text));
+  action(() => api.send(conversationId, text, sendMode));
 }
 function run(el: HTMLElement) {
   const a = el.dataset.action,
     id = el.dataset.id!;
+  if (a === 'sendMode') {
+    sendMode = el.dataset.mode === 'organize' ? 'organize' : 'chat';
+    render();
+    return;
+  }
+  if (a === 'olderMessages') {
+    messageLimit += 100;
+    render();
+    return;
+  }
+  if (a === 'planPage') {
+    planPage = Number(el.dataset.page);
+    render();
+    return;
+  }
   if (a === 'tab') {
     tab = el.dataset.tab!;
     render();
@@ -347,6 +366,8 @@ function run(el: HTMLElement) {
   }
   if (a === 'conversation') {
     conversationId = id;
+    messageLimit = 100;
+    sendMode = 'chat';
     tab = 'chat';
     render();
     return;
@@ -396,6 +417,8 @@ function run(el: HTMLElement) {
         break;
       case 'new':
         conversationId = await api.newConversation();
+        messageLimit = 100;
+        sendMode = 'chat';
         tab = 'chat';
         render();
         break;
@@ -489,6 +512,35 @@ function run(el: HTMLElement) {
     }
   });
 }
+function planList() {
+  planPage = Math.min(planPage, Math.max(0, Math.ceil(state.plans.length / 10) - 1));
+  return (
+    state.plans
+      .slice(planPage * 10, (planPage + 1) * 10)
+      .map(planCard)
+      .join('') +
+    '<div class="actions">' +
+    (planPage
+      ? button('新しい記録', 'planPage', 'quiet small', `data-page="${planPage - 1}"`)
+      : '') +
+    ((planPage + 1) * 10 < state.plans.length
+      ? button('以前の記録', 'planPage', 'quiet small', `data-page="${planPage + 1}"`)
+      : '') +
+    '</div>'
+  );
+}
+app.addEventListener('click', (event) => {
+  const el = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
+  if (el && app.contains(el) && !(el as HTMLButtonElement).disabled) run(el);
+});
+app.addEventListener('change', (event) => {
+  const el = event.target as HTMLSelectElement;
+  const entry = el.dataset.entry;
+  if (entry)
+    void action(() =>
+      api.editPlan(el.dataset.plan!, Number(el.dataset.rev), { [entry]: el.value as Category }),
+    );
+});
 app.addEventListener('compositionstart', () => {
   composing = true;
 });
@@ -498,32 +550,65 @@ app.addEventListener('compositionend', () => {
     if (renderPending) render();
   });
 });
-api.onEvent((event) => {
-  if (event.type === 'state') {
-    state = event.state;
-    render();
-  } else if (event.type === 'delta') {
-    const m = state.conversations
-      .find((c) => c.id === event.conversationId)
-      ?.messages.find((m) => m.id === event.messageId);
-    if (m) m.content += event.text;
-    const node = app.querySelector(`[data-message="${event.messageId}"] .message-text`);
-    if (node && m) node.textContent = m.content;
-    const scroll = document.querySelector('.chat-scroll');
-    if (scroll && scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop < 80)
-      scroll.scrollTop = scroll.scrollHeight;
-  } else if (event.type === 'progress') {
-    progress =
-      event.text +
-      (event.total ? ` · ${event.done.toLocaleString()} / ${event.total.toLocaleString()}` : '');
-    const node = document.querySelector('#progress');
-    if (node) node.textContent = progress;
-  } else toast(event.message);
-});
-api
-  .state()
-  .then((value) => {
+const synchronization = new StateSync(
+  () => api.state(),
+  (value) => {
     state = value;
     render();
-  })
-  .catch((e) => toast(e.message));
+  },
+  (event) => {
+    if (event.type === 'state') {
+      state = event.state;
+      render();
+    } else if (!state) {
+      return;
+    } else if (event.type === 'update') {
+      Object.assign(state, event.state);
+      render();
+    } else if (event.type === 'conversation') {
+      const index = state.conversations.findIndex((c) => c.id === event.conversation.id);
+      if (index < 0) state.conversations.push(event.conversation);
+      else state.conversations[index] = event.conversation;
+      render();
+    } else if (event.type === 'plan') {
+      const index = state.plans.findIndex((p) => p.id === event.plan.id);
+      if (index < 0) {
+        state.plans.unshift(event.plan);
+        planPage = 0;
+      } else state.plans[index] = event.plan;
+      if (tab === 'organize' || tab === 'chat') {
+        const node = app.querySelector<HTMLElement>(`[data-plan-card="${event.plan.id}"]`);
+        if (node && !composing) {
+          const restoreFocus = focusSnapshot();
+          node.outerHTML = planCard(event.plan);
+          restoreFocus?.();
+        } else render();
+      }
+    } else if (event.type === 'remove') {
+      if (event.collection === 'plans') state.plans = state.plans.filter((p) => p.id !== event.id);
+      else state.conversations = state.conversations.filter((c) => c.id !== event.id);
+      render();
+    } else if (event.type === 'clearConversations') {
+      state.conversations = [];
+    } else if (event.type === 'delta') {
+      const m = state.conversations
+        .find((c) => c.id === event.conversationId)
+        ?.messages.find((m) => m.id === event.messageId);
+      if (m) m.content += event.text;
+      const node = app.querySelector(`[data-message="${event.messageId}"] .message-text`);
+      if (node && m) node.textContent = m.content;
+      const scroll = document.querySelector('.chat-scroll');
+      if (scroll && scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop < 80)
+        scroll.scrollTop = scroll.scrollHeight;
+    } else if (event.type === 'progress') {
+      progress =
+        event.text +
+        (event.total ? ` · ${event.done.toLocaleString()} / ${event.total.toLocaleString()}` : '');
+      const node = document.querySelector('#progress');
+      if (node) node.textContent = progress;
+    } else toast(event.message);
+  },
+  (error) => toast(String(error)),
+);
+api.onEvent((event) => synchronization.receive(event));
+void synchronization.refresh();

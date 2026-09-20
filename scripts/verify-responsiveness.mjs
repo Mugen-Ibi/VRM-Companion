@@ -133,7 +133,7 @@ function installProbe() {
     armed = null;
   const results = [];
   window.companion.onEvent((event) => {
-    if (event.type === 'state') busy = event.state.busy;
+    if (event.type === 'state' || event.type === 'update') busy = event.state.busy;
   });
   void window.companion.state().then((state) => {
     busy = state.busy;

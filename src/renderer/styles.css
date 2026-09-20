@@ -678,3 +678,17 @@ td .reason {
   flex-wrap: wrap;
   gap: 12px;
 }
+.compose-modes {
+  display: flex;
+  gap: 8px;
+}
+.compose-modes .selected {
+  background: #edf0e3;
+  border-color: #687443;
+  color: #35401f;
+}
+.compose-hint {
+  font-size: 12px;
+  color: #686d63;
+  margin: 8px 0;
+}

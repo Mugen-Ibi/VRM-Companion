@@ -54,7 +54,7 @@ const report = {
     memory:
       'Electron app.getAppMetrics workingSetSize per owned process and summed working set. Excludes the externally owned llama-server and does not measure GPU VRAM.',
     inference:
-      'At most 15 requests by default, no concurrent requests from this script. Each goes through the application intent router and chat. A separate endurance run may also use the same server. Busy-only samples are reported separately from the full inference stage.',
+      'At most 15 requests by default, no concurrent requests from this script. Each goes through the application direct chat route (v0.0.0.3+). A separate endurance run may also use the same server. Busy-only samples are reported separately from the full inference stage.',
     hidden:
       'Hide only the benchmark avatar BrowserWindow; verify visible:false from avatarHost and no subsequent WebGL color clears/draw calls.',
   },
@@ -183,7 +183,8 @@ try {
   await panel.evaluate(async () => {
     window.__companionBenchmarkBusy = false;
     window.companion.onEvent((event) => {
-      if (event.type === 'state') window.__companionBenchmarkBusy = event.state.busy;
+      if (event.type === 'state' || event.type === 'update')
+        window.__companionBenchmarkBusy = event.state.busy;
     });
   });
   await panel.evaluate(async (settings) => {

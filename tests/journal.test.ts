@@ -107,6 +107,26 @@ function fixture() {
 }
 const signal = () => new AbortController().signal;
 
+test('failed progress and display notifications never invalidate committed file operations', async () => {
+  const f = fixture(),
+    p = f.plan(['one.txt', 'two.txt']);
+  const organizer = new Organizer(
+    f.store as unknown as Store,
+    f.native,
+    () => {
+      throw new Error('progress UI gone');
+    },
+    () => {
+      throw new Error('panel gone');
+    },
+  );
+  const result = await organizer.execute(p.id, p.revision, p.hash);
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(f.native.mutations, ['one.txt', 'two.txt']);
+  assert.ok(organizer.get(p.id).operations.every((op) => op.state === 'done'));
+  assert.equal(organizer.journalFault, undefined);
+});
+
 test('lost result and recovery writes block all later mutations until durable reconciliation', async () => {
   const f = fixture(),
     first = f.plan(['first.txt']),

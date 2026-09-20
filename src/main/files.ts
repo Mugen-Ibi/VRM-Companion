@@ -12,6 +12,8 @@ import {
   type Root,
 } from '../shared/types';
 import { Store } from './store';
+import { Repositories } from './repositories';
+import { notifySafely } from './notifications';
 export const MAX_FILE = 512 * 1024 ** 2,
   MAX_BYTES = 2 * 1024 ** 3,
   MAX_COUNT = 200;
@@ -118,18 +120,28 @@ export class Organizer {
     private store: Store,
     private native: NativeFiles,
     private progress: (text: string, done: number, total: number) => void,
-    private changed: () => void,
+    private changed: (plan?: Plan) => void,
     private protectedPaths: readonly string[] = [],
-  ) {}
+  ) {
+    const report = this.progress,
+      onChanged = this.changed;
+    this.progress = (...args) => notifySafely(() => report(...args));
+    this.changed = (plan) => notifySafely(() => onChanged(plan));
+  }
+  private get records() {
+    return new Repositories(this.store);
+  }
   get journalFault() {
     return this.fault;
   }
   isRevoked(id: string) {
-    return this.revokedRoots.has(id) || !!this.store.get<Root>('roots', id)?.revoked;
+    return this.revokedRoots.has(id) || !!this.records.roots.get(id)?.revoked;
   }
   private write(bucket: string, id: string, value: unknown) {
     try {
-      this.store.put(bucket, id, value);
+      if (bucket === 'plans') this.records.plans.put(value as Plan);
+      else if (bucket === 'roots') this.records.roots.put(value as Root);
+      else this.store.put(bucket, id, value);
     } catch (error) {
       this.canceled = true;
       this.fault = '作業記録を保存できません。復旧が完了するまでファイルの変更を停止します。';
@@ -161,14 +173,14 @@ export class Organizer {
     }
   }
   root(id: string) {
-    const root = this.store.get<Root>('roots', id);
+    const root = this.records.roots.get(id);
     if (!root || root.revoked || this.revokedRoots.has(id))
       throw new Error('対象フォルダの許可がありません。');
     this.assertUnprotected(root.path);
     return root;
   }
   private invalidatePlans(rootId: string) {
-    for (const plan of this.store.list<Plan>('plans'))
+    for (const plan of this.records.plans.list())
       if (plan.rootId === rootId && ['draft', 'ready', 'stale'].includes(plan.status)) {
         plan.status = 'stale';
         plan.hash = '';
@@ -176,7 +188,7 @@ export class Organizer {
       }
   }
   private persistRevocation(id: string) {
-    const root = this.store.get<Root>('roots', id);
+    const root = this.records.roots.get(id);
     if (!root) throw new Error('対象フォルダが見つかりません。');
     root.revoked = true;
     this.write('roots', id, root);
@@ -254,7 +266,7 @@ export class Organizer {
       ),
     );
     this.assertUnprotected(canonical, protectedPaths);
-    const existing = this.store.list<Root>('roots').find((r) => r.identity === checked.identity);
+    const existing = this.records.roots.list().find((r) => r.identity === checked.identity);
     const root = existing ?? {
       id: randomUUID(),
       path: canonical,
@@ -271,10 +283,10 @@ export class Organizer {
   }
   save(plan: Plan) {
     this.write('plans', plan.id, plan);
-    this.changed();
+    this.changed(plan);
   }
   get(id: string) {
-    const plan = this.store.get<Plan>('plans', id);
+    const plan = this.records.plans.get(id);
     if (!plan) throw new Error('計画が見つかりません。');
     return plan;
   }
@@ -426,7 +438,7 @@ export class Organizer {
   }
   async execute(id: string, revision: number, hash: string) {
     if (this.fault) throw new Error(this.fault);
-    if (this.executing || this.store.list<Plan>('plans').some((p) => this.unconfirmed(p)))
+    if (this.executing || this.records.plans.list().some((p) => this.unconfirmed(p)))
       throw new Error('先に未確定の作業を復旧してください。');
     const p = this.get(id),
       root = this.root(p.rootId);
@@ -495,7 +507,7 @@ export class Organizer {
     if (signal.aborted) throw new Error('中断しました。');
     for (const id of this.revokedRoots) this.persistRevocation(id);
     const budget: HashBudget = { bytes: 0, files: 0 };
-    for (const p of this.store.list<Plan>('plans').filter((p) => this.unconfirmed(p))) {
+    for (const p of this.records.plans.list().filter((p) => this.unconfirmed(p))) {
       const root = this.root(p.rootId);
       let unresolved = false;
       for (const op of p.operations.filter((o) => ['intent', 'unresolved'].includes(o.state))) {
@@ -584,7 +596,7 @@ export class Organizer {
       this.save(p);
     }
     if (signal.aborted) throw new Error('中断しました。');
-    if (!this.store.list<Plan>('plans').some((p) => this.unconfirmed(p))) {
+    if (!this.records.plans.list().some((p) => this.unconfirmed(p))) {
       // Even a failure before the first intent must pass an actual durable write.
       this.write('journal', 'recovery', { checkedAt: Date.now() });
       this.fault = undefined;
@@ -614,7 +626,7 @@ export class Organizer {
       root = this.root(original.rootId);
     if (['executing', 'recovery', 'draft', 'ready'].includes(original.status) || original.undoOf)
       throw new Error('この作業は復元対象にできません。');
-    const previous = this.store.list<Plan>('plans').filter((p) => p.undoOf === id);
+    const previous = this.records.plans.list().filter((p) => p.undoOf === id);
     if (previous.some((p) => ['ready', 'executing', 'recovery'].includes(p.status)))
       throw new Error('既存の復元計画を確認してください。');
     const reverted = new Set(

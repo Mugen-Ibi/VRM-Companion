@@ -33,7 +33,10 @@ import {
 import { Store } from './store';
 import { Organizer, NativeFiles } from './files';
 import { Llama, endpoint } from './llama';
-import { inspectVRM } from './vrm';
+import { runMaintenance } from './maintenance';
+import { settingsSchema, mergeSettingsEdit } from './settings';
+import { notifySafely } from './notifications';
+import { Repositories } from './repositories';
 import { ModelRuntime } from './model-runtime';
 
 const base = app.getAppPath(),
@@ -65,44 +68,19 @@ let previewGeneration = 0,
 let ignoredMouse: boolean | undefined;
 let recoveryWarning: string | undefined;
 let runtime: ModelRuntime | undefined;
+let eventSequence = 0;
 let avatarDragging = false,
   dragX = 0,
   dragY = 0;
 let dragTimer: ReturnType<typeof setTimeout> | undefined;
 const idSchema = z.string().uuid(),
   textSchema = z.string().min(1).max(6000);
-const settingsSchema = z
-  .object({
-    llmMode: z.enum(['external', 'managed']),
-    modelDirectory: z.string().max(32768),
-    serverPath: z.string().max(32768),
-    managedModel: z.string().max(64),
-    idleUnloadMinutes: z.number().int().min(0).max(120),
-    motionLevel: z.enum(['off', 'gentle', 'lively']),
-    renderQuality: z.enum(['eco', 'balanced', 'high']),
-    endpoint: z.string().max(200),
-    model: z.string().max(200),
-    context: z.number().int().min(1024).max(131072),
-    outputTokens: z.number().int().min(64).max(4096),
-    persona: z.string().min(1).max(80),
-    userName: z.string().max(80),
-    style: z.string().max(2000),
-    saveHistory: z.boolean(),
-    avatarId: z.string().uuid().nullable(),
-    avatarVisible: z.boolean(),
-    scale: z.number().min(0.5).max(1.8),
-    fps: z.number().int().min(10).max(60),
-    alwaysOnTop: z.boolean(),
-    autoStart: z.boolean(),
-    avatarX: z.number().optional(),
-    avatarY: z.number().optional(),
-  })
-  .strict();
 function effectiveSettings() {
   return preview ? { ...settings, avatarId: preview.id } : settings;
 }
-function state(): State {
+function status(): Omit<State, 'plans' | 'conversations'> {
   return {
+    sequence: eventSequence,
     llm: runtime?.state ?? { models: [], status: 'unloaded', loadedModel: '' },
     settings,
     avatarVisible:
@@ -113,8 +91,6 @@ function state(): State {
     roots: store
       .list<Root>('roots')
       .map((root) => ({ ...root, revoked: organizer.isRevoked(root.id) })),
-    plans: store.list<Plan>('plans').reverse(),
-    conversations,
     avatars: store.list<Avatar>('avatars'),
     pending,
     phase,
@@ -124,8 +100,14 @@ function state(): State {
     recoveryWarning: organizer.journalFault || recoveryWarning,
   };
 }
+function state(): State {
+  return { ...status(), plans: new Repositories(store).plans.list().reverse(), conversations };
+}
 function emit(event: AppEvent) {
-  if (panel && !panel.isDestroyed()) panel.webContents.send('companion:event', event);
+  event.sequence = ++eventSequence;
+  notifySafely(() => {
+    if (panel && !panel.isDestroyed()) panel.webContents.send('companion:event', event);
+  });
 }
 function avatarState() {
   return {
@@ -135,15 +117,18 @@ function avatarState() {
   };
 }
 function updateAvatar() {
-  if (avatarWindow && !avatarWindow.isDestroyed())
-    avatarWindow.webContents.send('avatar:update', avatarState());
+  notifySafely(() => {
+    if (avatarWindow && !avatarWindow.isDestroyed())
+      avatarWindow.webContents.send('avatar:update', avatarState());
+  });
 }
 function broadcast() {
-  emit({ type: 'state', state: state() });
+  emit({ type: 'update', state: status() });
   updateAvatar();
 }
 function persist(c: Conversation) {
-  if (settings.saveHistory) store.put('conversations', c.id, c);
+  if (settings.saveHistory) new Repositories(store).conversations.put(c);
+  emit({ type: 'conversation', conversation: c });
 }
 function conversation(id: string) {
   const c = conversations.find((c) => c.id === id);
@@ -232,6 +217,7 @@ function configureWindow(win: BrowserWindow) {
 function showPanel() {
   panel.show();
   panel.focus();
+  emit({ type: 'state', state: state() });
 }
 function setAvatarVisible(visible: boolean) {
   if (visible && !effectiveSettings().avatarId) return;
@@ -472,27 +458,23 @@ function registerAPI() {
     endpoint(next.endpoint);
     if (next.outputTokens >= next.context / 2)
       throw new Error('応答上限は文脈上限の半分未満にしてください。');
-    // Settings cannot choose arbitrary avatars or position windows; dedicated methods do that.
-    next.avatarId = settings.avatarId;
-    next.avatarVisible = settings.avatarVisible;
-    next.avatarX = settings.avatarX;
-    next.avatarY = settings.avatarY;
-    next.modelDirectory = settings.modelDirectory;
-    next.serverPath = settings.serverPath;
-    next.managedModel = settings.managedModel;
-    if (key !== undefined) {
-      const secret = z.string().max(512).parse(key);
-      if (secret) {
-        if (!safeStorage.isEncryptionAvailable())
-          throw new Error('APIキーを安全に保存できません。');
-        store.put('secrets', 'apiKey', safeStorage.encryptString(secret).toString('base64'));
-      } else store.delete('secrets', 'apiKey');
-    }
-    await task(async () => {
+    const secret = key === undefined ? undefined : z.string().max(512).parse(key);
+    if (secret && !safeStorage.isEncryptionAvailable())
+      throw new Error('APIキーを安全に保存できません。');
+    const encrypted = secret ? safeStorage.encryptString(secret).toString('base64') : secret;
+    await task(async (signal) => {
       if (next.llmMode !== settings.llmMode || next.context !== settings.context)
         await runtime?.stop();
-      store.put('settings', 'main', next);
-      settings = next;
+      signal.throwIfAborted();
+      const committed = mergeSettingsEdit(next, settings);
+      store.transaction(() => {
+        if (encrypted !== undefined) {
+          if (encrypted) store.put('secrets', 'apiKey', encrypted);
+          else store.delete('secrets', 'apiKey');
+        }
+        store.put('settings', 'main', committed);
+      });
+      settings = committed;
     }, 'idle');
     avatarWindow.setAlwaysOnTop(settings.alwaysOnTop);
     app.setLoginItemSettings({ openAtLogin: settings.autoStart });
@@ -582,23 +564,32 @@ function registerAPI() {
     broadcast();
     return id;
   });
-  handle('deleteConversation', (id: unknown) => {
-    idleOnly();
+  handle('deleteConversation', async (id: unknown) => {
     const value = idSchema.parse(id);
-    store.delete('conversations', value);
-    conversations = conversations.filter((c) => c.id !== value);
-    pending = null;
-    if (!conversations.length) newConversation();
-    broadcast();
+    await task(async () => {
+      await runMaintenance(base, {
+        kind: 'deleteBackupHistory',
+        directory: store.directory,
+        id: value,
+      });
+      store.deleteConversationRecord(value);
+      conversations = conversations.filter((c) => c.id !== value);
+      emit({ type: 'remove', collection: 'conversations', id: value });
+      pending = null;
+      if (!conversations.length) newConversation();
+    }, 'idle');
   });
-  handle('clearHistory', () => {
-    idleOnly();
-    store.clear('conversations');
-    conversations = [];
-    newConversation();
-    broadcast();
+  handle('clearHistory', async () => {
+    await task(async () => {
+      await runMaintenance(base, { kind: 'deleteBackupHistory', directory: store.directory });
+      store.deleteConversationRecord();
+      conversations = [];
+      emit({ type: 'clearConversations' });
+      newConversation();
+    }, 'idle');
   });
-  handle('send', async (id: unknown, text: unknown) => {
+  handle('send', async (id: unknown, text: unknown, requestedMode: unknown) => {
+    const mode = z.enum(['chat', 'organize']).default('chat').parse(requestedMode);
     const c = conversation(idSchema.parse(id)),
       input = textSchema.parse(text);
     idleOnly();
@@ -609,7 +600,10 @@ function registerAPI() {
     await task(async (signal) => {
       try {
         await ensureModel(signal);
-        const intent = await llm.intent(input, !!c.rootId, signal);
+        const intent =
+          mode === 'chat'
+            ? { intent: 'chat' as const, method: null, target: 'unspecified' as const }
+            : await llm.intent(input, !!c.rootId, signal);
         if (intent.intent === 'chat') {
           const history = [...c.messages];
           const m = message(c, 'assistant', '');
@@ -830,6 +824,7 @@ function registerAPI() {
       throw new Error('未解決の記録は削除できません。');
     store.delete('plans', p.id);
     store.delete('approvals', p.id);
+    emit({ type: 'remove', collection: 'plans', id: p.id });
     broadcast();
   });
   handle('importAvatar', async () => {
@@ -847,7 +842,7 @@ function registerAPI() {
       const stat = await fs.stat(file);
       if (stat.size > 100 * 1024 ** 2) throw new Error('100MiB以下のVRMを選択してください。');
       const bytes = await fs.readFile(file);
-      const info = inspectVRM(bytes, (b) => nativeImage.createFromBuffer(b).getSize());
+      const info = await runMaintenance<Avatar>(base, { kind: 'vrm', bytes });
       const confirm = await dialog.showMessageBox(panel, {
         type: 'info',
         title: 'VRMの情報',
@@ -897,9 +892,12 @@ function registerAPI() {
   handle('showAvatar', () => setAvatarVisible(true));
   handle('hideAvatar', () => setAvatarVisible(false));
   handle('openData', () => shell.openPath(store.directory));
-  handle('backupData', () => {
-    idleOnly();
-    return store.backup();
+  handle('backupData', async () => {
+    let file = '';
+    await task(async () => {
+      file = await runMaintenance<string>(base, { kind: 'backup', directory: store.directory });
+    }, 'idle');
+    return file;
   });
   ipcMain.handle('avatar:state', (event) => {
     verifySender(event, avatarWindow, avatarFile);
@@ -970,9 +968,11 @@ function registerAPI() {
     previewTimer = undefined;
     if (ok === true) {
       try {
-        store.put('avatars', candidate.id, candidate);
         const next = { ...settings, avatarId: candidate.id };
-        store.put('settings', 'main', next);
+        store.transaction(() => {
+          new Repositories(store).avatars.put(candidate);
+          store.put('settings', 'main', next);
+        });
         settings = next;
         preview = null;
         broadcast();
@@ -1012,7 +1012,9 @@ else {
       settings = settingsSchema.parse({ ...DEFAULTS, ...store.get<Settings>('settings', 'main') });
       endpoint(settings.endpoint);
       recoveryWarning = store.get<{ warning: string }>('recovery', 'restored')?.warning;
-      conversations = store.list<Conversation>('conversations');
+      const repositories = new Repositories(store);
+      repositories.validate();
+      conversations = repositories.conversations.list();
       if (!conversations.length) newConversation();
       for (const p of store.list<Plan>('plans')) {
         if (p.status === 'executing') {
@@ -1027,7 +1029,10 @@ else {
         store,
         new NativeFiles(path.join(base, 'native/windows-files/bin/CompanionFiles.exe')),
         (text, done, total) => emit({ type: 'progress', text, done, total }),
-        broadcast,
+        (plan) => {
+          if (plan) emit({ type: 'plan', plan });
+          else broadcast();
+        },
         [base, path.dirname(app.getPath('exe'))],
       );
       session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) =>

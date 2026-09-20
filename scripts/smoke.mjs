@@ -12,6 +12,8 @@ const files = path.resolve('..', 'VRM-Companion-test-artifacts', path.basename(d
 await mkdir(files, { recursive: true });
 await writeFile(path.join(files, 'hello.txt'), 'keep this content');
 await writeFile(path.join(files, 'image.png'), 'sample');
+let intentRequests = 0,
+  chatRequests = 0;
 const server = createServer(async (req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -32,6 +34,7 @@ const server = createServer(async (req, res) => {
   for await (const chunk of req) body += chunk;
   const data = JSON.parse(body);
   if (data.response_format) {
+    intentRequests++;
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
       JSON.stringify({
@@ -49,6 +52,7 @@ const server = createServer(async (req, res) => {
       }),
     );
   } else {
+    chatRequests++;
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     for (const content of ['こんにちは。', 'ローカルで会話できます。'])
       res.write('data: ' + JSON.stringify({ choices: [{ delta: { content } }] }) + '\n\n');
@@ -61,7 +65,13 @@ const errors = [];
 try {
   const launchEnv = { ...process.env, COMPANION_TEST_DATA: path.join(dir, 'state') };
   delete launchEnv.ELECTRON_RUN_AS_NODE;
-  application = await electron.launch({ args: ['.'], env: launchEnv, timeout: 30000 });
+  const packaged = process.env.COMPANION_PACKAGE;
+  application = await electron.launch({
+    ...(packaged ? { executablePath: path.resolve(packaged) } : {}),
+    args: [...(packaged ? [] : ['.']), '--user-data-dir=' + path.join(dir, 'state')],
+    env: launchEnv,
+    timeout: 30000,
+  });
   application.process().stderr.on('data', (b) => {
     const t = b.toString();
     if (!/ExperimentalWarning|security warning/i.test(t)) process.stderr.write(t);
@@ -85,6 +95,16 @@ try {
   }, files);
   await window.getByRole('button', { name: 'フォルダを選択', exact: true }).click();
   await window.getByText(files, { exact: true }).waitFor();
+  assert.equal(intentRequests, 0);
+  assert.equal(chatRequests, 1);
+  await window.evaluate(async () => {
+    const state = await window.companion.state();
+    await window.companion.send(state.conversations[0].id, 'このフォルダを種類別に整理して');
+    if ((await window.companion.state()).plans.length) throw new Error('Chat mode created a plan');
+  });
+  assert.equal(intentRequests, 0);
+  assert.equal(chatRequests, 2);
+  await window.getByRole('button', { name: '整理依頼', exact: true }).click();
   await window.getByLabel('メッセージ', { exact: true }).fill('このフォルダを種類別に整理して');
   await window.getByRole('button', { name: '送信 ↗' }).click();
   await window
@@ -93,6 +113,7 @@ try {
       { exact: true },
     )
     .waitFor();
+  assert.equal(intentRequests, 1);
   await window.getByRole('button', { name: 'フォルダ整理', exact: false }).first().click();
   await window.getByRole('button', { name: '内容を検証する', exact: true }).first().click();
   await window.getByRole('button', { name: 'この内容で整理する', exact: true }).click();

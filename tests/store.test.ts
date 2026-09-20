@@ -46,21 +46,45 @@ test('backup includes committed WAL data and conversation deletion also updates 
 test('offline restore archives damaged DB, revokes roots and reconciles every recorded operation', () => {
   const directory = fixture(),
     store = new Store(directory);
-  store.put('roots', 'root', { id: 'root', revoked: false });
-  store.put('plans', 'plan', {
-    operations: [
-      { kind: 'move', state: 'pending' },
-      { kind: 'mkdir', state: 'done' },
-    ],
-    status: 'ready',
-    hash: 'approved',
+  const rootId = randomUUID(),
+    planId = randomUUID(),
+    settledId = randomUUID();
+  store.put('roots', rootId, {
+    id: rootId,
+    path: directory,
+    identity: 'root-identity',
+    revoked: false,
+  });
+  const move = {
+    id: randomUUID(),
+    kind: 'move',
+    from: 'a.txt',
+    to: '文書/a.txt',
+    identity: { id: 'file', size: 1, modified: '1', hash: 'a'.repeat(64) },
+    state: 'pending',
+  };
+  const plan = {
+    id: planId,
+    rootId,
+    rootIdentity: 'root-identity',
+    conversationId: randomUUID(),
+    revision: 1,
+    hash: 'a'.repeat(64),
     expiresAt: Date.now() + 10000,
-  });
-  store.put('plans', 'settled', {
-    operations: [{ kind: 'move', state: 'done' }],
+    createdAt: 1,
+    status: 'ready',
+    entries: [],
+    operations: [move, { id: randomUUID(), kind: 'mkdir', to: '文書', state: 'done' }],
+    totalBytes: 1,
+  };
+  store.put('plans', planId, plan);
+  store.put('plans', settledId, {
+    ...plan,
+    id: settledId,
     status: 'completed',
+    operations: [{ ...move, state: 'done' }],
   });
-  store.put('approvals', 'plan', { consumedAt: 0 });
+  store.put('approvals', planId, { consumedAt: 0 });
   const snapshot = store.backup();
   store.close();
   const damaged = Buffer.from('not a database');
@@ -71,17 +95,17 @@ test('offline restore archives damaged DB, revokes roots and reconciles every re
   assert.deepEqual(fs.readFileSync(path.join(archive, 'companion.sqlite')), damaged);
   const restored = new Store(directory);
   try {
-    assert.equal(restored.get<{ revoked: boolean }>('roots', 'root')!.revoked, true);
+    assert.equal(restored.get<{ revoked: boolean }>('roots', rootId)!.revoked, true);
     const plan = restored.get<{ status: string; hash: string; operations: { state: string }[] }>(
       'plans',
-      'plan',
+      planId,
     )!;
     assert.equal(plan.status, 'recovery');
     assert.equal(plan.hash, '');
     assert.ok(plan.operations.every((op) => op.state === 'unresolved'));
     assert.deepEqual(restored.list('approvals'), []);
     assert.ok(restored.get('recovery', 'restored'));
-    assert.equal(restored.get<{ status: string }>('plans', 'settled')!.status, 'completed');
+    assert.equal(restored.get<{ status: string }>('plans', settledId)!.status, 'completed');
   } finally {
     restored.close();
   }
@@ -100,4 +124,25 @@ test('invalid restore snapshot does not replace existing data and future schema 
   db.exec('PRAGMA user_version=999');
   db.close();
   assert.throws(() => new Store(directory), /新しいバージョン/);
+});
+
+test('a SQLite-valid snapshot with malformed records cannot replace the current database', () => {
+  const directory = fixture(),
+    store = new Store(directory);
+  store.put('conversations', 'invalid-id', { messages: 'not an array' });
+  const bad = store.backup();
+  store.delete('conversations', 'invalid-id');
+  // Keep the intentionally malformed snapshot independent of conversation cleanup.
+  const db = new DatabaseSync(bad);
+  db.prepare('INSERT INTO records VALUES(?,?,?)').run(
+    'conversations',
+    'invalid-id',
+    JSON.stringify({ messages: 'not an array' }),
+  );
+  db.close();
+  store.close();
+  const file = path.join(directory, 'companion.sqlite'),
+    before = fs.readFileSync(file);
+  assert.throws(() => Store.restore(directory, bad), /保存データの形式/);
+  assert.deepEqual(fs.readFileSync(file), before);
 });

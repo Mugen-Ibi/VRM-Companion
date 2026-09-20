@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { validateStoredRecord } from './repositories';
 const SCHEMA_VERSION = 1;
 export class Store {
   private db: DatabaseSync;
@@ -49,6 +50,15 @@ export class Store {
       }[]
     ).map((row) => JSON.parse(row.value) as T);
   }
+  records() {
+    return (
+      this.db.prepare('SELECT bucket,id,value FROM records').all() as {
+        bucket: string;
+        id: string;
+        value: string;
+      }[]
+    ).map((row) => ({ ...row, value: JSON.parse(row.value) as unknown }));
+  }
   put(bucket: string, id: string, value: unknown) {
     this.db
       .prepare(
@@ -56,7 +66,20 @@ export class Store {
       )
       .run(bucket, id, JSON.stringify(value));
   }
-  private removeBackupHistory(id?: string) {
+  transaction<T>(fn: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const value = fn();
+      if (value && typeof (value as { then?: unknown }).then === 'function')
+        throw new Error('Database transactions must be synchronous.');
+      this.db.exec('COMMIT');
+      return value;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+  removeBackupHistory(id?: string) {
     const directory = path.join(this.directory, 'backups');
     if (!fs.existsSync(directory)) return;
     for (const name of fs
@@ -86,6 +109,11 @@ export class Store {
   clear(bucket: string) {
     if (bucket === 'conversations') this.removeBackupHistory();
     this.db.prepare('DELETE FROM records WHERE bucket=?').run(bucket);
+  }
+  // Caller has already completed backup cleanup in a worker while holding the task lock.
+  deleteConversationRecord(id?: string) {
+    if (id) this.db.prepare("DELETE FROM records WHERE bucket='conversations' AND id=?").run(id);
+    else this.db.prepare("DELETE FROM records WHERE bucket='conversations'").run();
   }
   backup() {
     const directory = path.join(this.directory, 'backups');
@@ -124,6 +152,7 @@ export class Store {
       recovery.exec('BEGIN IMMEDIATE;');
       for (const row of rows) {
         const value = JSON.parse(row.value);
+        validateStoredRecord(row.bucket, row.id, value);
         if (row.bucket === 'roots') {
           value.revoked = true;
           put.run(JSON.stringify(value), row.bucket, row.id);

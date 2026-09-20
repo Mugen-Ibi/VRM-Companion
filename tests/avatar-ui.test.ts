@@ -520,6 +520,19 @@ function panelHarness(initial: Partial<State> = {}) {
       HTMLInputElement: Input,
       HTMLTextAreaElement: Textarea,
       CATEGORIES,
+      StateSync: class {
+        constructor(
+          read: unknown,
+          snapshot: unknown,
+          private apply: (event: any) => void,
+        ) {}
+        receive(event: any) {
+          this.apply(event);
+        }
+        refresh() {
+          return Promise.resolve();
+        }
+      },
       setTimeout: () => 0,
       clearTimeout() {},
       confirm: () => true,
@@ -550,6 +563,20 @@ test('suggestion buttons populate the composer without sending', () => {
   assert.equal(h.draft(), 'こんにちは');
   assert.equal(h.element('message-input').value, 'こんにちは');
   assert.deepEqual(h.sent, []);
+});
+
+test('chat is the default and organization is an explicit choice preserved across updates', async () => {
+  const h = panelHarness();
+  h.run('suggest', { text: 'このフォルダを整理して' });
+  h.run('send');
+  await Promise.resolve();
+  assert.deepEqual(h.sent[0], ['conversation', 'このフォルダを整理して', 'chat']);
+  h.run('sendMode', { mode: 'organize' });
+  h.event({ type: 'update', state: { ...h.state, phase: 'success' } });
+  h.run('suggest', { text: 'このフォルダを種類別に整理して' });
+  h.run('send');
+  await Promise.resolve();
+  assert.deepEqual(h.sent[1], ['conversation', 'このフォルダを種類別に整理して', 'organize']);
 });
 test('retry restores the user input preceding the failed response and requires an explicit send', () => {
   const h = panelHarness({

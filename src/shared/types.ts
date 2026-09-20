@@ -151,6 +151,7 @@ export interface Pending {
   needsTarget: boolean;
 }
 export interface State {
+  sequence?: number;
   llm: LlmState;
   avatarVisible: boolean;
   settings: Settings;
@@ -165,11 +166,17 @@ export interface State {
   hasApiKey: boolean;
   recoveryWarning?: string;
 }
-export type AppEvent =
+export type AppEvent = (
   | { type: 'state'; state: State }
+  | { type: 'update'; state: Omit<State, 'plans' | 'conversations'> }
+  | { type: 'plan'; plan: Plan }
+  | { type: 'conversation'; conversation: Conversation }
+  | { type: 'remove'; collection: 'plans' | 'conversations'; id: string }
+  | { type: 'clearConversations' }
   | { type: 'delta'; conversationId: string; messageId: string; text: string }
   | { type: 'progress'; text: string; done: number; total: number }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+) & { sequence?: number };
 export type Reply<T> = { ok: true; value: T } | { ok: false; error: string };
 export interface API {
   chooseModelDirectory(): Promise<void>;
@@ -184,7 +191,7 @@ export interface API {
   newConversation(): Promise<string>;
   deleteConversation(id: string): Promise<void>;
   clearHistory(): Promise<void>;
-  send(id: string, text: string): Promise<void>;
+  send(id: string, text: string, mode?: 'chat' | 'organize'): Promise<void>;
   cancel(): Promise<void>;
   selectRoot(conversationId: string): Promise<void>;
   chooseRoot(conversationId: string, rootId: string): Promise<void>;

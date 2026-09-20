@@ -15,6 +15,7 @@ const paths = await packager({
   buildVersion: releaseVersion,
   platform: 'win32',
   arch: 'x64',
+  electronZipDir: process.env.COMPANION_ELECTRON_ZIP_DIR || undefined,
   overwrite: true,
   asar: false,
   prune: false,

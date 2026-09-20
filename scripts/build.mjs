@@ -33,6 +33,14 @@ await build({
   sourcemap: true,
 });
 await build({
+  entryPoints: ['src/main/maintenance-worker.ts'],
+  outfile: 'dist/main/maintenance-worker.cjs',
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  external: ['node:sqlite'],
+});
+await build({
   entryPoints: ['src/preload/panel.ts', 'src/preload/avatar.ts'],
   outdir: 'dist/preload',
   outExtension: { '.js': '.cjs' },
