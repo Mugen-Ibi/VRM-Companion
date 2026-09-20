@@ -20,7 +20,7 @@ APIの存在は [ElectronウィンドウAPI](https://www.electronjs.org/docs/lat
 
 UIはTypeScriptによるDOM操作で実装し、Reactは使用していない。VRMの毎フレーム更新はパネルの状態更新から分離する。現在の組合せはElectron 44.4.3、Three.js 0.180.0、three-vrm 3.5.5で、実際の依存解決はpackage-lock.jsonに記録する。package.jsonのThree.js指定は`^0.180.0`であるため、更新時はlockfileと互換性試験を確認する。[three-vrm公式](https://github.com/pixiv/three-vrm)
 
-対象実機はWindows 11 Pro、AMD Ryzen 7 260、RAM 32GB、RTX 5070 Laptop（VRAM 8GB）、NVIDIAドライバー32.0.16.1692。LLMとVRM描画でVRAMを共有するため、GGUFの容量だけでGPU使用量を判断しない。現アプリの既定はcontext 4096、応答上限512トークン、1同時生成、30fps。実測した空き容量を見てGPUオフロード量を調整する。これらは性能保証値ではなく、音声モデルを同時常駐させる場合は別途予算を見直す。
+対象実機はWindows 11 x64、RAM 32GB、8GB級のNVIDIA GPUを搭載したノートPC。LLMとVRM描画でVRAMを共有するため、GGUFの容量だけでGPU使用量を判断しない。現アプリの既定はcontext 4096、応答上限512トークン、1同時生成、30fps。実測した空き容量を見てGPUオフロード量を調整する。これらは性能保証値ではなく、音声モデルを同時常駐させる場合は別途予算を見直す。
 
 ## 2. 論理構成と権限境界
 
@@ -90,7 +90,7 @@ VRM 0.xと1.0は内部アダプターで向き・表情・メタ情報を統一�
 
 LLMバイナリ・モデルの同梱、ダウンロード、GPUバックエンドの自動セットアップは行わない。開発・セットアップ用の`setup-llama.ps1`と`start-llama.ps1`による外部環境の準備とは区別する。
 
-初期検証にはユーザー提供の`Qwen3.5-9B-Q4_K_M.gguf`と旧llama.cpp b9843を使用した。その後、共有環境を`D:\LLM`へ集約し、現在の管理モードはb10964（v0.4.1、CUDA 13.3）でQwen 9BとLFM 1.2Bを検証している。外部接続先の既定8080は維持し、管理モードは別の空きポートを使う。環境構成は[llama.cpp環境管理](llama-environment.md)、追加機能の結果は[改善記録](improvements.md)を参照する。
+初期検証にはユーザー提供の9B級GGUFと旧llama.cppを使用した。その後、共有環境を`%LOCALAPPDATA%\VRM-Companion-LLM`へ集約し、公式安定版で9B級・小型モデルを検証している。外部接続先の既定8080は維持し、管理モードは別の空きポートを使う。環境構成は[llama.cpp環境管理](llama-environment.md)、追加機能の結果は[改善記録](improvements.md)を参照する。
 
 接続先は`http://127.0.0.1:<port>`またはIPv6ループバックに限定し、HTTPリダイレクトを拒否する。APIキーを設定可能にし、rendererやログに渡さない。外部起動サーバーのlisten設定自体はアプリで強制できないため、セットアップでループバックbindと認証を案内する。
 
@@ -184,7 +184,7 @@ recovery → 対象を固定した手動確認 → reviewed
 
 ## 7. データとAPIの契約
 
-保存先はElectronの`userData`配下とし、実際の絶対パスを設定画面に表示する。現在の配置はDBが`companion.sqlite`、VRM本体が`avatars/<id>.vrm`であり、当初案の`avatars/<id>/model.vrm`から簡素化した。SQLiteは`node:sqlite`を使用し、`records(bucket, id, value)`にJSONレコードを保存する。`journal_mode=WAL`、`synchronous=FULL`、`busy_timeout=3000`、`secure_delete=ON`を設定し、起動時に`quick_check`と`user_version`を確認する。操作ジャーナルは各手順で永続化し、ファイル操作より先に記録する。
+保存先はElectronの`userData`配下とし、実際の絶対パスを設定画面に表示する。現在の配置はDBが`companion.sqlite`、VRM本体が`avatars/<id>.vrm`であり、当初案の`avatars/<id>/model.vrm`から簡素化した。SQLiteは`node:sqlite`を使用し、`records(bucket, id, value)`にJSONレコードを保存する。JSON値はAES-256-GCMでレコードごとに暗号化し、ランダムなデータ鍵をElectron safeStorageで現在のWindowsアカウントに結び付けて保護する。`journal_mode=WAL`、`synchronous=FULL`、`busy_timeout=3000`、`secure_delete=ON`を設定し、起動時に`quick_check`と`user_version`を確認する。操作ジャーナルは各手順で永続化し、ファイル操作より先に記録する。
 
 | 実装上の型／記録 | 主な項目・設計時との対応 |
 | --- | --- |
@@ -238,7 +238,7 @@ Panelイベントは`companion:event`上の`update / conversation / plan / remov
 
 通常会話の表示は100メッセージ単位、整理記録は10計画単位。更新中の計画カードだけを差し替える。DBの初期読込み・初期IPCスナップショットは引き続き全件であり、サーバー側のページ取得や履歴の遅延読込みは今後の大規模データ対策として残る。
 
-会話保存無効時は新しい会話の更新をメモリ上だけに保持し、既存の保存履歴を消すには履歴削除を行う。一方、変更操作の復旧ジャーナルは必須であり無効化しない。作業履歴は自動削除せず、削除時は復元できなくなる範囲を表示する。未解決の復旧記録は削除対象にしない。会話・許可・計画・アバターに型付きRepositoryとZod検証を導入し、起動とバックアップ復元前にレコード形状・IDを確認する。不正レコードを黙って削除・補正しない。設定とAPIキー、アバター登録と選択は各々SQLiteトランザクションでまとめる。非同期の設定保存は待機後の最新状態へ編集項目をマージし、表示・選択・位置など専用操作の変更を保持する。保存形式は互換のままで、スキーマ版は`user_version=1`で管理し、既存の旧スキーマを更新する前にはDBバックアップを作成する。新しい未知のスキーマを勝手に開き直さない。
+会話保存無効時は新しい会話の更新をメモリ上だけに保持し、既存の保存履歴を消すには履歴削除を行う。一方、変更操作の復旧ジャーナルは必須であり無効化しない。作業履歴は自動削除せず、削除時は復元できなくなる範囲を表示する。未解決の復旧記録は削除対象にしない。会話・許可・計画・アバターに型付きRepositoryとZod検証を導入し、起動とバックアップ復元前にレコード形状・IDを確認する。不正レコードを黙って削除・補正しない。設定とAPIキー、アバター登録と選択は各々SQLiteトランザクションでまとめる。非同期の設定保存は待機後の最新状態へ編集項目をマージし、表示・選択・位置など専用操作の変更を保持する。暗号化形式は`user_version=2`で管理し、版1のDBとアプリ管理下バックアップは同じデータ鍵で移行後、secure deleteとVACUUMを行う。新しい未知のスキーマや鍵のない暗号化DBを勝手に開き直さない。
 
 ### 7.1 バックアップと破損時の復元
 

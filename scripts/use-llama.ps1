@@ -1,4 +1,4 @@
-param([string]$Root = 'D:\LLM', [Parameter(Mandatory)][string]$Version)
+param([string]$Root = (Join-Path $env:LOCALAPPDATA 'VRM-Companion-LLM'), [Parameter(Mandatory)][string]$Version)
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^b\d+-cuda\d+\.\d+$') { throw 'Invalid version; use b11050-cuda13.4.' }
 $Root = [IO.Path]::GetFullPath($Root).TrimEnd('\')

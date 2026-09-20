@@ -3,8 +3,8 @@ import path from 'node:path';
 
 export type MaintenanceRequest =
   | { kind: 'vrm'; bytes: Uint8Array }
-  | { kind: 'backup'; directory: string }
-  | { kind: 'deleteBackupHistory'; directory: string; id?: string };
+  | { kind: 'backup'; directory: string; dataKey?: Uint8Array }
+  | { kind: 'deleteBackupHistory'; directory: string; id?: string; dataKey?: Uint8Array };
 
 // One-shot workers keep expensive parsing, hashing and maintenance off the UI host.
 export function runMaintenance<T>(base: string, request: MaintenanceRequest): Promise<T> {

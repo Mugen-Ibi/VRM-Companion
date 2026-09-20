@@ -1,4 +1,4 @@
-param([string]$Root = 'D:\LLM', [string]$Build = 'stable', [string]$Cuda = '', [switch]$Activate)
+param([string]$Root = (Join-Path $env:LOCALAPPDATA 'VRM-Companion-LLM'), [string]$Build = 'stable', [string]$Cuda = '', [switch]$Activate)
 $ErrorActionPreference = 'Stop'
 $Root = [IO.Path]::GetFullPath($Root)
 if ($Build -notin @('stable','latest') -and $Build -notmatch '^b\d+$') { throw 'Specify stable, latest, or b<number>.' }

@@ -19,14 +19,14 @@ MVPの実装とWindows向けパッケージを作成しました。検証結果�
 
 ## llama.cpp
 
-起動済みの既存サーバーと、アプリが起動・停止する管理モードを選べます。管理モードは会話上部のモデル一覧で切り替え、1モデルずつ読み込みます。「メモリ解放」と既定5分の自動解放に対応し、解放後は次の送信時に再読込します。実機検証モデルはQwen3.5-9B-Q4_K_MとLFM2.5-1.2B-JPです。GGUFは同梱・自動取得しません。
+起動済みの既存サーバーと、アプリが起動・停止する管理モードを選べます。管理モードは会話上部のモデル一覧で切り替え、1モデルずつ読み込みます。「メモリ解放」と既定5分の自動解放に対応し、解放後は次の送信時に再読込します。小型モデルと9B級モデルで実機検証しています。GGUFは同梱・自動取得しません。
 
 管理モードはcontext 4096・並列1・batch 512 / ubatch 128・promptキャッシュRAM 0を既定とし、llama.cppの自動GPU割当を使用します。外部サーバーの設定やプロセスは変更しません。新機能と検証結果は [改善記録](docs/improvements.md) を参照してください。
 
-共有環境を `D:\LLM` に集約しています。本体と対応するCUDA DLLは `releases/<build>-cuda<version>/bin` に保存し、`llama` ジャンクションで使用版を切り替えます。モデルは `models`、旧環境は `backups` に保持します。公式ZIPと展開後のファイルのSHA-256を検証します。構成・更新・性能比較は [llama.cpp環境管理](docs/llama-environment.md) を参照してください。
+共有環境は既定で `%LOCALAPPDATA%\VRM-Companion-LLM` に作成します。本体と対応するCUDA DLLは `releases/<build>-cuda<version>/bin` に保存し、`llama` ジャンクションで使用版を切り替えます。モデルは `models`、旧環境は `backups` に保持します。公式ZIPと展開後のファイルのSHA-256を検証します。構成・更新・性能比較は [llama.cpp環境管理](docs/llama-environment.md) を参照してください。
 
 ```powershell
-./scripts/start-llama.ps1
+./scripts/start-llama.ps1 -Model "$env:LOCALAPPDATA\VRM-Companion-LLM\models\<model>.gguf"
 # 停止
 ./scripts/stop-llama.ps1
 # 安定版を取得（稼働版は変えません）
@@ -57,7 +57,7 @@ npm.cmd run test:ui
 npm.cmd run package
 ```
 
-`package` は最新ソースのビルドと依存ライセンス生成も行います。UI試験は自作VRM・模擬サーバー・使い捨てファイルで行い、個人データを整理しません。ファイル試験はWindows NTFSが必要です。UI試験の整理対象はアプリ自身の保護範囲を避け、隣の `VRM-Companion-test-artifacts` に作ります。
+`package` は最新ソースのビルドと依存ライセンス生成も行います。公開用パッケージにはWindowsコード署名設定が必須です。署名証明書のないローカル検証だけは `COMPANION_ALLOW_UNSIGNED=1` で明示的に許可できます。UI試験は自作VRM・模擬サーバー・使い捨てファイルで行い、個人データを整理しません。ファイル試験はWindows NTFSが必要です。UI試験の整理対象はアプリ自身の保護範囲を避け、隣の `VRM-Companion-test-artifacts` に作ります。
 
 公開名・Gitタグ・Windows実行ファイルのバージョンは `package.json` の `releaseVersion`（現在 `0.0.0.3`）を使います。npm向けの `version` はSemVer形式の `0.0.3-beta.0` です。`COMPANION_PACKAGE_OUT` で出力先を指定でき、今回の配布用ビルドは `release/v0.0.0.5` に出力します。
 
@@ -70,7 +70,7 @@ v0.0.0.5では設定保存の競合を修正し、通知を差分化しました
 - 日本語ストリーミング、停止、再入力、人格設定、会話履歴管理。
 - 通常会話と整理依頼の明示切替、フォルダ直下の固定拡張子分類、計画の編集と明示承認。
 - 上書き禁止、ID/SHA-256検証、操作記録、クラッシュ後の照合、成功項目の復元。
-- SQLiteバックアップと破損時の復旧案内。
+- Windowsアカウントで保護した鍵によるSQLiteレコード暗号化、暗号化バックアップと破損時の復旧案内。
 
 整理はローカルNTFS・直下のみ、1計画200ファイル/2GiB、1ファイル512MiBです。削除、上書き、再帰整理、意味による分類、任意コマンドは対象外です。
 
@@ -81,6 +81,7 @@ v0.0.0.5では設定保存の競合を修正し、通知を差分化しました
 | [開発と検証計画](docs/roadmap.md) | 検証条件と未確認事項 |
 | [使い方](docs/usage.md) | セットアップ、日常操作、復旧 |
 | [検証記録](docs/verification.md) | 実測値と要件対応 |
+| [セキュリティ方針](SECURITY.md) | 脆弱性の非公開報告、配布物と保存データの信頼方針 |
 
 本体の [LICENSE](LICENSE) はUnlicenseです。外部ライブラリは [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) と配布物のElectron/Chromiumライセンスを参照してください。VRM・GGUFは各提供元の条件に従います。
 

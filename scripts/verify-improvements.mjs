@@ -144,11 +144,10 @@ try {
   await avatar.reload();
   result.gpuBefore = await gpu();
   if (!process.env.COMPANION_AVATAR_ONLY) {
-    await choose('chooseModelDirectory', process.env.COMPANION_MODELS || 'D:/LLM/models');
-    await choose(
-      'chooseLlamaServer',
-      process.env.COMPANION_SERVER || 'D:/LLM/llama/llama-server.exe',
-    );
+    if (!process.env.COMPANION_MODELS || !process.env.COMPANION_SERVER)
+      throw new Error('Set COMPANION_MODELS and COMPANION_SERVER for managed-model verification.');
+    await choose('chooseModelDirectory', process.env.COMPANION_MODELS);
+    await choose('chooseLlamaServer', process.env.COMPANION_SERVER);
     await panel.evaluate(async () => {
       const s = await window.companion.state();
       await window.companion.settings({
@@ -167,8 +166,7 @@ try {
     await panel.locator('[data-tab="chat"]').click();
     const models = (await state()).llm.models;
     assert.ok(models.length >= 2);
-    for (const name of [/^LFM2\.5-1\.2B-JP/, /^Qwen3\.5-9B-Q4_K_M/]) {
-      const model = models.find((m) => name.test(m.name));
+    for (const model of [models[0], models.at(-1)]) {
       assert.ok(model, 'local verification model missing');
       const started = Date.now();
       await panel.locator('#chat-model').selectOption(model.id);
@@ -266,7 +264,8 @@ try {
     'hidden avatar: zero animation callbacks and zero WebGL draws over 2.5 seconds',
   );
   if (!process.env.COMPANION_AVATAR_ONLY) {
-    const small = (await state()).llm.models.find((m) => /^LFM2\.5-1\.2B-JP/.test(m.name));
+    const small = (await state()).llm.models.at(0);
+    assert.ok(small, 'at least one managed model is required');
     await panel.evaluate((id) => window.companion.selectModel(id), small.id);
     await panel.evaluate(() => window.companion.unloadModel());
     await panel.evaluate(async () => {

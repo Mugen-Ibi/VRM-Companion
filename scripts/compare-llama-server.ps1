@@ -1,11 +1,12 @@
-param([string]$Root = 'D:\LLM', [string]$StableVersion = 'b10964-cuda13.3', [string]$LatestVersion = 'b11050-cuda13.4')
+param([string]$Root = (Join-Path $env:LOCALAPPDATA 'VRM-Companion-LLM'), [Parameter(Mandatory)][string]$Model,
+  [string]$StableVersion = 'b10964-cuda13.3', [string]$LatestVersion = 'b11050-cuda13.4')
 $ErrorActionPreference = 'Stop'
 $output = Join-Path $Root ('benchmarks/server-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 if (Get-Process llama-server -ErrorAction SilentlyContinue) { throw 'Stop existing servers first.' }
 $rows = @()
 foreach ($version in @($StableVersion,$LatestVersion,$LatestVersion,$StableVersion)) {
-  & (Join-Path $PSScriptRoot 'start-llama.ps1') -Root $Root -Version $version -Port 8081 -Context 16384
+  & (Join-Path $PSScriptRoot 'start-llama.ps1') -Root $Root -Model $Model -Version $version -Port 8081 -Context 16384
   try {
     for ($i = 0; $i -lt 4; $i++) {
       $body = @{ prompt = ('Explain how to organize local project files by extension while preserving the originals. ' * 100);

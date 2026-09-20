@@ -1,4 +1,4 @@
-param([string]$Root = 'D:\LLM', [ValidateRange(1024,65535)][int]$Port = 8080)
+param([string]$Root = (Join-Path $env:LOCALAPPDATA 'VRM-Companion-LLM'), [ValidateRange(1024,65535)][int]$Port = 8080)
 $ErrorActionPreference = 'Stop'
 $statePath = Join-Path $Root "run/llama-$Port.json"
 if (-not (Test-Path -LiteralPath $statePath)) { throw 'No managed server record. Stop manually launched servers from their original terminal.' }

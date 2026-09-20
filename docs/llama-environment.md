@@ -6,7 +6,7 @@
 
 [公式安定版v0.4.1](https://github.com/ggml-org/llama.cpp/releases/tag/v0.4.1) の `nightly-tag.txt` はb10964を指し、両タグの実コミットは `b29c606e28a01b1bc8c1351026a0fa6e616bf6c4` で一致します。[b11050](https://github.com/ggml-org/llama.cpp/releases/tag/b11050) は確認時点の最新番号付きプレリリースです。
 
-RTX 5070 Laptop GPU（8GB）、ドライバー616.92、同じ `Qwen3.5-9B-Q4_K_M.gguf` で比較しました。本体とCUDA DLLの組み合わせを含めた公式配布パッケージの比較です。CUDAバージョンを揃えたソースコード単体の比較ではありません。
+8GB級のNVIDIA GPUと同じ9B級GGUFで比較しました。本体とCUDA DLLの組み合わせを含めた公式配布パッケージの比較です。CUDAバージョンを揃えたソースコード単体の比較ではありません。
 
 | 測定項目 | 安定版b10964 | 最新版b11050 |
 | --- | ---: | ---: |
@@ -23,12 +23,12 @@ APIはcontext 16,384・並列1・GPU layers 99、他の起動条件も同一で�
 
 安定版は基礎測定の入力処理で約1.8〜2.2%高い平均値でした。生成とAPI所要時間の差は0.5%未満です。測定値にはばらつきがあり、全用途で安定版のほうが速いと断定できる差ではありません。今回の環境では最新版の実用上明確な優位を確認できなかったため、基礎測定でわずかに優位な安定版を選びました。別モデルや長い会話では結果が変わる可能性があります。
 
-生データは `D:\LLM\benchmarks\20260919-195438` と `D:\LLM\benchmarks\server-20260919-200117` に保存しています。モデルSHA-256、測定設定、個別サンプル、GPUの状態、ログを確認できます。途中で停止スクリプトの日時比較を修正してやり直したAPI試験のディレクトリは、採用結果に含めません。
+生データは共有環境の `benchmarks\<run-id>` と `benchmarks\server-<run-id>` に保存します。モデルSHA-256、測定設定、個別サンプル、GPUの状態、ログを確認できます。途中で停止スクリプトの日時比較を修正してやり直したAPI試験のディレクトリは、採用結果に含めません。
 
 ## 配置
 
 ```text
-D:\LLM\
+%LOCALAPPDATA%\VRM-Companion-LLM\
   llama\                         使用版binへのジャンクション（既存パスを維持）
   releases\
     b10964-cuda13.3\
@@ -46,23 +46,24 @@ D:\LLM\
   run\                           停止時の照合用PID・開始時刻・実行パス
 ```
 
-実行用途には公式バイナリのリリース管理を採用しました。Git cloneやCUDA Toolkitのインストール、グローバルPATH変更は不要です。既存バイナリに `.git` を付けてもupstreamのソースとは同期できないため、実行物はバージョンとハッシュで固定します。保守スクリプトの原本はVRM-Companionの `scripts` でGit管理できる構成とし、セットアップ実行時に `D:\LLM\scripts` にコピーします。
+実行用途には公式バイナリのリリース管理を採用しました。Git cloneやCUDA Toolkitのインストール、グローバルPATH変更は不要です。既存バイナリに `.git` を付けてもupstreamのソースとは同期できないため、実行物はバージョンとハッシュで固定します。保守スクリプトの原本はVRM-Companionの `scripts` でGit管理できる構成とし、セットアップ実行時に共有環境の `scripts` にコピーします。
 
-元の `llama` と別置きCUDA 13.3 DLLは `backups\legacy-20260919-200301` に退避しました。モデルの移動・改変・追加ダウンロードは行っていません。
+元の `llama` と別置きCUDA DLLは `backups\legacy-<run-id>` に退避します。モデルの移動・改変・追加ダウンロードは行いません。
 
 ## 日常の起動・停止
 
 PowerShell 7（`pwsh`）で実行します。管理者権限は通常不要です。
 
 ```powershell
-& D:\LLM\scripts\start-llama.ps1
-& D:\LLM\scripts\stop-llama.ps1
+$root = Join-Path $env:LOCALAPPDATA 'VRM-Companion-LLM'
+& "$root\scripts\start-llama.ps1" -Model "$root\models\<model>.gguf"
+& "$root\scripts\stop-llama.ps1"
 ```
 
-既定モデルはQwen3.5-9B-Q4_K_M、接続先は `http://127.0.0.1:8080`。context 16,384、GPU layers 99、並列1、temperature 0.3、top-p 0.9、repeat penalty 1.1です。VRM Companionの接続URLを変更する必要はありません。アプリのコンテキスト設定はサーバー以下にします。起動完了は `/health` で確認し、失敗時は今回起動したプロセスを終了します。
+モデルは `-Model` で明示指定し、接続先は `http://127.0.0.1:8080` です。context 16,384、GPU layers 99、並列1、temperature 0.3、top-p 0.9、repeat penalty 1.1です。VRM Companionの接続URLを変更する必要はありません。アプリのコンテキスト設定はサーバー以下にします。起動完了は `/health` で確認し、失敗時は今回起動したプロセスを終了します。
 
 ```powershell
-& D:\LLM\scripts\start-llama.ps1 -Model 'D:\LLM\models\Agents-A1-4B-Q4_K_M.gguf' -Context 4096
+& "$root\scripts\start-llama.ps1" -Model "$root\models\<model>.gguf" -Context 4096
 ```
 
 8GB VRAMで9Bモデルのサーバーを複数同時起動しないでください。使用中ポートでは起動を拒否します。停止コマンドは記録したPID・開始時刻・実行パスを照合します。従来のターミナルから手動起動したサーバーは、そのターミナルのCtrl+Cで停止します。
@@ -73,19 +74,19 @@ PowerShell 7（`pwsh`）で実行します。管理者権限は通常不要で�
 
 ```powershell
 # 最新の安定版／番号付きプレリリースを取得
-& D:\LLM\scripts\setup-llama.ps1 -Build stable
-& D:\LLM\scripts\setup-llama.ps1 -Build latest
+& "$root\scripts\setup-llama.ps1" -Build stable
+& "$root\scripts\setup-llama.ps1" -Build latest
 # バージョンとCUDAを指定して再現可能な取得
-& D:\LLM\scripts\setup-llama.ps1 -Build b11050 -Cuda 13.4
+& "$root\scripts\setup-llama.ps1" -Build b11050 -Cuda 13.4
 
 # 比較時はサーバーを止める
-& D:\LLM\scripts\stop-llama.ps1
-& D:\LLM\scripts\compare-llama.ps1 -StableVersion b10964-cuda13.3 -LatestVersion b11050-cuda13.4
-& D:\LLM\scripts\compare-llama-server.ps1 -StableVersion b10964-cuda13.3 -LatestVersion b11050-cuda13.4
+& "$root\scripts\stop-llama.ps1"
+& "$root\scripts\compare-llama.ps1" -Model "$root\models\<model>.gguf" -StableVersion b10964-cuda13.3 -LatestVersion b11050-cuda13.4
+& "$root\scripts\compare-llama-server.ps1" -Model "$root\models\<model>.gguf" -StableVersion b10964-cuda13.3 -LatestVersion b11050-cuda13.4
 
 # 採用版へ切り替えて再起動
-& D:\LLM\scripts\use-llama.ps1 -Version b10964-cuda13.3
-& D:\LLM\scripts\start-llama.ps1
+& "$root\scripts\use-llama.ps1" -Version b10964-cuda13.3
+& "$root\scripts\start-llama.ps1" -Model "$root\models\<model>.gguf"
 ```
 
 将来は表示されたビルドとCUDAの番号に置き換えます。新しいCUDAがドライバーで使えるかはインストール時の `--list-devices` で検証します。失敗した場合はドライバー互換性を確認して対応する配布版を `-Cuda` で指定します。稼働中のバイナリは上書きしません。切り替え前にllamaプロセスを停止する必要があります。ロールバックは保存済みのバージョンを `use-llama.ps1` に指定するだけです。

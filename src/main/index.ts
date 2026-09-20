@@ -30,14 +30,14 @@ import {
   type Conversation,
   type Message,
 } from '../shared/types';
-import { Store } from './store';
+import { Store, type DataProtection } from './store';
 import { Organizer, NativeFiles } from './files';
 import { Llama, endpoint } from './llama';
 import { runMaintenance } from './maintenance';
 import { settingsSchema, mergeSettingsEdit } from './settings';
 import { notifySafely } from './notifications';
 import { Repositories } from './repositories';
-import { ModelRuntime } from './model-runtime';
+import { ModelRuntime, inspectServerTrust } from './model-runtime';
 
 const base = app.getAppPath(),
   panelFile = path.join(base, 'dist/renderer/index.html'),
@@ -45,9 +45,10 @@ const base = app.getAppPath(),
 // Isolated test data is accepted only in a non-packaged test launch.
 if (!app.isPackaged && process.env.COMPANION_TEST_DATA)
   app.setPath('userData', path.resolve(process.env.COMPANION_TEST_DATA));
-// An explicit launch option supports isolated/portable data for both packaged and source builds.
+// The explicit data switch is reserved for source-build tests; packaged builds must use userData.
 const requestedData = app.commandLine.getSwitchValue('user-data-dir');
-if (requestedData) app.setPath('userData', path.resolve(requestedData));
+const unsupportedPackagedDataSwitch = app.isPackaged && !!requestedData;
+if (requestedData && !app.isPackaged) app.setPath('userData', path.resolve(requestedData));
 let panel: BrowserWindow,
   avatarWindow: BrowserWindow,
   tray: Tray,
@@ -68,6 +69,7 @@ let previewGeneration = 0,
 let ignoredMouse: boolean | undefined;
 let recoveryWarning: string | undefined;
 let runtime: ModelRuntime | undefined;
+let dataProtection: DataProtection | undefined;
 let eventSequence = 0;
 let avatarDragging = false,
   dragX = 0,
@@ -157,6 +159,15 @@ function newConversation() {
 function apiKey() {
   const secret = store.get<string>('secrets', 'apiKey');
   return secret ? safeStorage.decryptString(Buffer.from(secret, 'base64')) : '';
+}
+function windowsDataProtection(): DataProtection {
+  if (!safeStorage.isEncryptionAvailable())
+    throw new Error('Windowsの保存データ保護を利用できないため起動できません。');
+  return {
+    protect: (key) => safeStorage.encryptString(key.toString('base64')).toString('base64'),
+    unprotect: (wrapped) =>
+      Buffer.from(safeStorage.decryptString(Buffer.from(wrapped, 'base64')), 'base64'),
+  };
 }
 const llm = new Llama(
   () =>
@@ -526,8 +537,21 @@ function registerAPI() {
       const executable = await fs.realpath(result.filePaths[0]);
       if (path.basename(executable).toLowerCase() !== 'llama-server.exe')
         throw new Error('llama-server.exeを選択してください。');
+      const trust = await inspectServerTrust(executable);
+      if (!trust.trusted) {
+        const confirmation = await dialog.showMessageBox(panel, {
+          type: 'warning',
+          title: '提供元を確認できない実行ファイル',
+          message: 'このllama-server.exeは公式取得記録と一致しません。',
+          detail: `SHA-256: ${trust.hash}\n\n実行すると、このアプリと同じWindowsユーザー権限でファイルや環境へアクセスできます。入手元を確認できる場合だけ許可してください。`,
+          buttons: ['キャンセル', '危険性を理解して使用'],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        if (confirmation.response !== 1) return 'idle';
+      }
       await runtime!.stop();
-      settings = { ...settings, serverPath: executable };
+      settings = { ...settings, serverPath: executable, serverHash: trust.hash };
       store.put('settings', 'main', settings);
     });
   });
@@ -577,6 +601,7 @@ function registerAPI() {
         kind: 'deleteBackupHistory',
         directory: store.directory,
         id: value,
+        dataKey: store.exportDataKey?.(),
       });
       signal.throwIfAborted();
       store.deleteConversationRecord(value);
@@ -588,7 +613,11 @@ function registerAPI() {
   });
   handle('clearHistory', async () => {
     await task(async (signal) => {
-      await runMaintenance(base, { kind: 'deleteBackupHistory', directory: store.directory });
+      await runMaintenance(base, {
+        kind: 'deleteBackupHistory',
+        directory: store.directory,
+        dataKey: store.exportDataKey?.(),
+      });
       signal.throwIfAborted();
       store.deleteConversationRecord();
       conversations = [];
@@ -903,7 +932,11 @@ function registerAPI() {
   handle('backupData', async () => {
     let file = '';
     await task(async () => {
-      file = await runMaintenance<string>(base, { kind: 'backup', directory: store.directory });
+      file = await runMaintenance<string>(base, {
+        kind: 'backup',
+        directory: store.directory,
+        dataKey: store.exportDataKey?.(),
+      });
     }, 'idle');
     return file;
   });
@@ -1026,7 +1059,12 @@ else {
   });
   app.whenReady().then(async () => {
     try {
-      store = new Store(app.getPath('userData'));
+      if (unsupportedPackagedDataSwitch)
+        throw new Error(
+          '配布版では --user-data-dir を使用できません。標準の保存先で起動してください。',
+        );
+      dataProtection = windowsDataProtection();
+      store = new Store(app.getPath('userData'), { protection: dataProtection });
       settings = settingsSchema.parse({ ...DEFAULTS, ...store.get<Settings>('settings', 'main') });
       endpoint(settings.endpoint);
       recoveryWarning = store.get<{ warning: string }>('recovery', 'restored')?.warning;
@@ -1045,7 +1083,14 @@ else {
       }
       organizer = new Organizer(
         store,
-        new NativeFiles(path.join(base, 'native/windows-files/bin/CompanionFiles.exe')),
+        new NativeFiles(
+          app.isPackaged
+            ? path.join(
+                process.resourcesPath,
+                'app.asar.unpacked/native/windows-files/bin/CompanionFiles.exe',
+              )
+            : path.join(base, 'native/windows-files/bin/CompanionFiles.exe'),
+        ),
         (text, done, total) => emit({ type: 'progress', text, done, total }),
         (plan) => {
           if (plan) emit({ type: 'plan', plan });
@@ -1091,6 +1136,7 @@ else {
         store?.close();
       } catch {}
       const directory = app.getPath('userData');
+      const recoveryAvailable = !!dataProtection;
       const result = await dialog.showMessageBox({
         type: 'error',
         title: 'VRM Companionを起動できません',
@@ -1099,12 +1145,14 @@ else {
           'データは削除していません。\n保存先: ' +
           directory +
           '\n\nバックアップの復元では、元のDBを別フォルダに保管し、フォルダの許可と承認を失効させます。バックアップ作成以後の会話・作業記録は戻りません。',
-        buttons: ['保存先を開く', 'バックアップを選んで復元', '終了'],
+        buttons: recoveryAvailable
+          ? ['保存先を開く', 'バックアップを選んで復元', '終了']
+          : ['保存先を開く', '終了'],
         defaultId: 0,
-        cancelId: 2,
+        cancelId: recoveryAvailable ? 2 : 1,
       });
       if (result.response === 0) await shell.openPath(directory);
-      if (result.response === 1) {
+      if (recoveryAvailable && result.response === 1) {
         const selected = await dialog.showOpenDialog({
           title: '設定画面で作成したバックアップを選択',
           defaultPath: path.join(directory, 'backups'),
@@ -1113,7 +1161,7 @@ else {
         });
         if (!selected.canceled) {
           try {
-            Store.restore(directory, selected.filePaths[0]);
+            Store.restore(directory, selected.filePaths[0], dataProtection!);
             app.relaunch();
           } catch (error) {
             dialog.showErrorBox('バックアップを復元できません', String(error));

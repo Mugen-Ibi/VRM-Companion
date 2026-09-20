@@ -29,7 +29,10 @@ try {
     ]);
     value = inspectVRM(Buffer.from(request.bytes), (image) => imageSize(image));
   } else {
-    const store = new Store(request.directory);
+    const store = new Store(
+      request.directory,
+      request.dataKey ? { dataKey: request.dataKey } : undefined,
+    );
     try {
       if (request.kind === 'backup') value = store.backup();
       else if (request.kind === 'deleteBackupHistory') store.removeBackupHistory(request.id);

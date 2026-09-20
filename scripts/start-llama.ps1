@@ -1,12 +1,12 @@
 param(
-  [string]$Root = 'D:\LLM', [string]$Model = '', [string]$Version = '',
+  [string]$Root = (Join-Path $env:LOCALAPPDATA 'VRM-Companion-LLM'), [string]$Model = '', [string]$Version = '',
   [ValidateRange(1024,65535)][int]$Port = 8080,
   [ValidateRange(0,999)][int]$GpuLayers = 99,
   [ValidateRange(1024,1048576)][int]$Context = 16384
 )
 $ErrorActionPreference = 'Stop'
 $Root = [IO.Path]::GetFullPath($Root)
-if (-not $Model) { $Model = Join-Path $Root 'models/Qwen3.5-9B-Q4_K_M.gguf' }
+if (-not $Model) { throw 'Specify the GGUF model with -Model.' }
 if (-not (Test-Path -LiteralPath $Model -PathType Leaf)) { throw 'GGUF model not found. Specify -Model.' }
 $directory = Join-Path $Root 'llama'
 if ($Version) {

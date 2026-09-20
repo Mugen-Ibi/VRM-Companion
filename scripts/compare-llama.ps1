@@ -1,4 +1,4 @@
-param([string]$Root = 'D:\LLM', [string]$Model = 'D:\LLM\models\Qwen3.5-9B-Q4_K_M.gguf',
+param([string]$Root = (Join-Path $env:LOCALAPPDATA 'VRM-Companion-LLM'), [Parameter(Mandatory)][string]$Model,
   [string]$StableVersion = 'b10964-cuda13.3', [string]$LatestVersion = 'b11050-cuda13.4')
 $ErrorActionPreference = 'Stop'
 foreach ($version in @($StableVersion,$LatestVersion)) { if ($version -notmatch '^b\d+-cuda\d+\.\d+$') { throw 'Invalid version.' } }

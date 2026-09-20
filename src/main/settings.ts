@@ -6,6 +6,7 @@ export const settingsSchema = z
     llmMode: z.enum(['external', 'managed']),
     modelDirectory: z.string().max(32768),
     serverPath: z.string().max(32768),
+    serverHash: z.string().regex(/^$|^[a-f0-9]{64}$/),
     managedModel: z.string().max(64),
     idleUnloadMinutes: z.number().int().min(0).max(120),
     motionLevel: z.enum(['off', 'gentle', 'lively']),
@@ -39,6 +40,7 @@ export function mergeSettingsEdit(edit: Settings, current: Settings): Settings {
     avatarY: current.avatarY,
     modelDirectory: current.modelDirectory,
     serverPath: current.serverPath,
+    serverHash: current.serverHash,
     managedModel: current.managedModel,
   };
 }

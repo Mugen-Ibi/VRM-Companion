@@ -5,7 +5,32 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { DEFAULTS } from '../src/shared/types';
-import { ModelRuntime, launchArguments, scanModels } from '../src/main/model-runtime';
+import {
+  fileSha256,
+  inspectServerTrust,
+  ModelRuntime,
+  launchArguments,
+  scanModels,
+} from '../src/main/model-runtime';
+
+test('server trust requires an official release manifest with the exact executable hash', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-server-trust-')),
+    bin = path.join(root, 'bin'),
+    executable = path.join(bin, 'llama-server.exe');
+  await fs.mkdir(bin);
+  await fs.writeFile(executable, 'trusted executable');
+  const hash = await fileSha256(executable);
+  await fs.writeFile(
+    path.join(root, 'manifest.json'),
+    JSON.stringify({
+      release: 'https://github.com/ggml-org/llama.cpp/releases/tag/b12345',
+      files: [{ name: 'llama-server.exe', sha256: hash }],
+    }),
+  );
+  assert.deepEqual(await inspectServerTrust(executable), { hash, trusted: true });
+  await fs.appendFile(executable, ' changed');
+  assert.equal((await inspectServerTrust(executable)).trusted, false);
+});
 
 test('GGUF catalog excludes projections, incomplete splits, links and invalid headers', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-models-'));
@@ -63,10 +88,12 @@ test('managed lifecycle authenticates, reuses one model, stops on switch and can
     await fs.writeFile(path.join(root, 'one.gguf'), 'GGUF');
     await fs.writeFile(path.join(root, 'two.gguf'), 'GGUF');
     const models = await scanModels(root);
+    const serverPath = path.join(root, 'llama-server.exe');
     const s = {
       ...DEFAULTS,
       modelDirectory: root,
-      serverPath: path.join(root, 'llama-server.exe'),
+      serverPath,
+      serverHash: await fileSha256(serverPath),
       managedModel: models[0].id,
     };
     const signal = new AbortController().signal;
@@ -148,6 +175,7 @@ test('a change to a later GGUF shard restarts the owned model; unchanged shards 
       ...DEFAULTS,
       modelDirectory: root,
       serverPath: path.join(root, 'llama-server.exe'),
+      serverHash: await fileSha256(path.join(root, 'llama-server.exe')),
       managedModel: (await scanModels(root))[0].id,
     };
     await runtime.ensure(settings, new AbortController().signal);

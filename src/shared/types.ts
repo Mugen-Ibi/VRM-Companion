@@ -21,6 +21,7 @@ export interface Settings {
   llmMode: 'external' | 'managed';
   modelDirectory: string;
   serverPath: string;
+  serverHash: string;
   managedModel: string;
   idleUnloadMinutes: number;
   motionLevel: 'off' | 'gentle' | 'lively';
@@ -46,6 +47,7 @@ export const DEFAULTS: Settings = {
   llmMode: 'external',
   modelDirectory: '',
   serverPath: '',
+  serverHash: '',
   managedModel: '',
   idleUnloadMinutes: 5,
   motionLevel: 'gentle',

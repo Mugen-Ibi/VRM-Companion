@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -81,6 +82,34 @@ export function launchArguments(model: string, port: number, context: number) {
     '--jinja',
   ];
 }
+export async function fileSha256(file: string) {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  return hash.digest('hex');
+}
+export async function inspectServerTrust(executable: string) {
+  const hash = await fileSha256(executable),
+    manifestPath = path.resolve(path.dirname(executable), '..', 'manifest.json');
+  try {
+    const stat = await fs.stat(manifestPath);
+    if (!stat.isFile() || stat.size > 1024 * 1024) return { hash, trusted: false };
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
+      release?: unknown;
+      files?: { name?: unknown; sha256?: unknown }[];
+    };
+    const officialRelease =
+      typeof manifest.release === 'string' &&
+      /^https:\/\/github\.com\/ggml-org\/llama\.cpp\/releases\/tag\/[A-Za-z0-9._-]+$/.test(
+        manifest.release,
+      );
+    const recorded = manifest.files?.find(
+      (file) => file.name === path.basename(executable) && file.sha256 === hash,
+    );
+    return { hash, trusted: officialRelease && !!recorded };
+  } catch {
+    return { hash, trusted: false };
+  }
+}
 async function availablePort(): Promise<number> {
   const server = net.createServer();
   return new Promise((resolve, reject) => {
@@ -92,6 +121,21 @@ async function availablePort(): Promise<number> {
   });
 }
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+function serverEnvironment(key: string) {
+  const env: NodeJS.ProcessEnv = { LLAMA_API_KEY: key };
+  for (const name of [
+    'SystemRoot',
+    'WINDIR',
+    'TEMP',
+    'TMP',
+    'PATH',
+    'PATHEXT',
+    'CUDA_VISIBLE_DEVICES',
+    'GGML_CUDA_ENABLE_UNIFIED_MEMORY',
+  ])
+    if (process.env[name] !== undefined) env[name] = process.env[name];
+  return env;
+}
 async function modelSignature(file: string) {
   const name = path.basename(file),
     split = name.match(/^(.*)-00001-of-(\d{5})\.gguf$/i);
@@ -163,6 +207,8 @@ export class ModelRuntime {
     const executable = await fs.realpath(settings.serverPath);
     if (path.basename(executable).toLowerCase() !== 'llama-server.exe')
       throw new Error('llama-server.exeを選択してください。');
+    if (!settings.serverHash || (await fileSha256(executable)) !== settings.serverHash)
+      throw new Error('llama-server.exeが選択後に変更されています。設定で選び直してください。');
     const port = await availablePort(),
       key = randomBytes(32).toString('hex');
     signal.throwIfAborted();
@@ -174,7 +220,7 @@ export class ModelRuntime {
       windowsHide: true,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, LLAMA_API_KEY: key },
+      env: serverEnvironment(key),
     });
     this.child = child;
     this.closed = new Promise((resolve) => {

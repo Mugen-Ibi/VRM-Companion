@@ -5,11 +5,68 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../src/main/store';
+import { DEFAULTS } from '../src/shared/types';
 function fixture() {
   const directory = path.resolve('artifacts/store-tests', randomUUID());
   fs.mkdirSync(directory, { recursive: true });
   return directory;
 }
+const protection = {
+  protect: (key: Buffer) => 'test:' + key.toString('base64'),
+  unprotect: (wrapped: string) => Buffer.from(wrapped.replace(/^test:/, ''), 'base64'),
+};
+test('protected stores migrate existing records and backups without leaving plaintext values', () => {
+  const directory = fixture(),
+    conversationId = randomUUID();
+  let store = new Store(directory);
+  store.put('settings', 'main', DEFAULTS);
+  store.put('conversations', conversationId, {
+    id: conversationId,
+    title: 'private title',
+    messages: [
+      {
+        id: randomUUID(),
+        role: 'user',
+        content: 'private message',
+        createdAt: 1,
+      },
+    ],
+  });
+  const legacyBackup = store.backup();
+  store.close();
+
+  store = new Store(directory, { protection });
+  try {
+    assert.equal(
+      store.get<{ messages: { content: string }[] }>('conversations', conversationId)!.messages[0]
+        .content,
+      'private message',
+    );
+    for (const file of [path.join(directory, 'companion.sqlite'), legacyBackup]) {
+      const db = new DatabaseSync(file, { readOnly: true });
+      const values = db.prepare('SELECT value FROM records').all() as { value: string }[];
+      assert.ok(values.length > 0);
+      assert.ok(values.every((row) => row.value.startsWith('enc:v1:')));
+      assert.ok(values.every((row) => !row.value.includes('private')));
+      assert.equal(
+        (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
+        2,
+      );
+      db.close();
+    }
+    const snapshot = store.backup();
+    store.close();
+    fs.writeFileSync(path.join(directory, 'companion.sqlite'), 'damaged');
+    Store.restore(directory, snapshot, protection);
+    store = new Store(directory, { protection });
+    assert.equal(
+      store.get<{ title: string }>('conversations', conversationId)!.title,
+      'private title',
+    );
+  } finally {
+    store.close();
+  }
+});
 test('backup includes committed WAL data and conversation deletion also updates snapshots', () => {
   const directory = fixture(),
     store = new Store(directory);

@@ -56,22 +56,22 @@ v0.0.0.2 Betaの配布用EXEは再ビルド後、`artifacts/acceptance-178982986
 
 | 項目 | 実測／採用値 |
 | --- | --- |
-| OS | Windows 11 Pro x64 |
-| CPU | AMD Ryzen 7 260 with Radeon 780M Graphics |
+| OS | Windows 11 x64 |
+| CPU | x64ノートPC |
 | RAM | 33,599,221,760 bytes（約32GiB） |
-| GPU | NVIDIA RTX 5070 Laptop、VRAM 8GB、AMD Radeon 780M併設 |
-| NVIDIAドライバー | 616.92（Win32表示32.0.16.1692） |
+| GPU | 8GB級NVIDIA GPU |
+| NVIDIAドライバー | 検証時の対応版 |
 | 実装 | Electron 44.4.3、Three.js 0.180.0、@pixiv/three-vrm 3.5.5、Zod 4.6.5 |
 | ビルド | Node.js 24.20.0、esbuild、Windows .NET Framework C#コンパイラ |
-| 推論モデル | ユーザー提供Qwen3.5-9B-Q4_K_M.gguf |
-| GGUF SHA-256 | `03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8` |
+| 推論モデル | ユーザー提供の9B級GGUF |
+| GGUF SHA-256 | ローカル検証記録で照合（公開文書には記載しない） |
 | 既存サーバー | b9843 / commit 86b94708f、127.0.0.1:8080、起動時context 16384・並列4 |
 | アプリ設定 | context 4096、通常output 512、測定用短文128、thinking無効 |
 | 更新ランタイム | b10964 / commit b29c606e2、公式安定v0.4.1対応、Windows CUDA 13.3 x64 |
 
 CPU/RAM/GPU/ドライバーはCIMとnvidia-smiで確認しました。電源モード、AC接続状態、室温、他アプリ負荷を固定した専用ベンチマーク室ではありません。
 
-更新ランタイムは `.local/llama/b10964` へ別置きし、公式アセットのSHA-256を検証しました。別ポート8081・CPUモードで同GGUFの6意図判定と日本語ストリームを確認し、検証後にその専用プロセスを終了しました。`--list-devices` でRTX 5070 Laptopの認識も確認済みです。既存8080の入替えはしていません。GPUオフロードでの更新版の速度は未測定です。[公式リリースv0.4.1](https://github.com/ggml-org/llama.cpp/releases/tag/v0.4.1)
+更新ランタイムはローカル検証領域へ別置きし、公式アセットのSHA-256を検証しました。別ポート・CPUモードで同GGUFの6意図判定と日本語ストリームを確認し、検証後にその専用プロセスを終了しました。`--list-devices` でNVIDIA GPUの認識も確認済みです。既存接続先の入替えはしていません。[公式リリースv0.4.1](https://github.com/ggml-org/llama.cpp/releases/tag/v0.4.1)
 
 依存の正確な解決結果は `package-lock.json` に固定しています。`npm audit` の取得結果は脆弱性0件でした（取得時点。将来の脆弱性がないことを保証するものではありません）。
 
