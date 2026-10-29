@@ -521,11 +521,12 @@ function registerAPI() {
       const directory = await fs.realpath(result.filePaths[0]);
       await runtime!.stop();
       signal.throwIfAborted();
-      const models = await runtime!.refresh(directory);
-      signal.throwIfAborted();
-      const next = { ...settings, modelDirectory: directory, managedModel: models[0]?.id ?? '' };
-      store.put('settings', 'main', next);
-      settings = next;
+      await runtime!.refresh(directory, (models) => {
+        signal.throwIfAborted();
+        const next = { ...settings, modelDirectory: directory, managedModel: models[0]?.id ?? '' };
+        store.put('settings', 'main', next);
+        settings = next;
+      });
     });
   });
   handle('chooseLlamaServer', async () => {

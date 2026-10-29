@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import { ModelRuntime } from '../src/main/model-runtime';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -211,6 +214,9 @@ function mainHarness() {
       senderFrame: avatarWindow.webContents.mainFrame,
     };
   return {
+    setModelDirectorySelection: (directory: string) => {
+      context.dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] });
+    },
     setServerSelection: (
       trusted: boolean,
       confirm: (details: any) => Promise<{ response: number }>,
@@ -598,9 +604,11 @@ for (const stage of ['stop', 'refresh'])
       stop: async () => {
         if (stage === 'stop') await gate.promise;
       },
-      refresh: async () => {
+      refresh: async (_directory: string, beforePublish: (models: unknown[]) => void) => {
         if (stage === 'refresh') await gate.promise;
-        return [{ id: 'a'.repeat(64) }];
+        const models = [{ id: 'a'.repeat(64) }];
+        beforePublish(models);
+        return models;
       },
       cancelIdle() {},
       scheduleIdle() {},
@@ -612,4 +620,57 @@ for (const stage of ['stop', 'refresh'])
     await assert.rejects(pending);
     assert.equal((await h.invoke('state')).settings.modelDirectory, DEFAULTS.modelDirectory);
     assert.equal(h.store.get('settings', 'main'), undefined);
+  });
+
+for (const outcome of ['canceled', 'write failure', 'accepted'])
+  test(`model directory catalogue publishes only after committed settings: ${outcome}`, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'companion-catalogue-'));
+    const h = mainHarness(),
+      gate = deferred();
+    const oldModels = [{ id: '1'.repeat(64), name: 'old.gguf', size: 4 }];
+    const publications: unknown[] = [];
+    const runtime = new ModelRuntime(
+      () => {
+        if (runtime.state.models.some((model) => model.name === 'new.gguf'))
+          publications.push(h.store.get('settings', 'main'));
+      },
+      () => false,
+    );
+    runtime.state.models = oldModels;
+    const refresh = runtime.refresh.bind(runtime);
+    runtime.refresh = async (...args) => {
+      await gate.promise;
+      return refresh(...args);
+    };
+    try {
+      await fs.writeFile(path.join(root, 'new.gguf'), 'GGUF');
+      h.setModelDirectorySelection(root);
+      h.setRuntime(runtime);
+      if (outcome === 'write failure')
+        h.store.put = () => {
+          throw new Error('injected settings write failure');
+        };
+      const pending = h.invoke('chooseModelDirectory');
+      await nextTurn();
+      if (outcome === 'canceled') h.abort();
+      gate.resolve();
+      if (outcome === 'accepted') await pending;
+      else await assert.rejects(pending);
+      const state = await h.invoke('state');
+      if (outcome === 'accepted') {
+        assert.equal(state.settings.modelDirectory, root);
+        assert.equal(state.llm.models[0].name, 'new.gguf');
+        assert.equal(publications.length, 1);
+        assert.equal((publications[0] as typeof DEFAULTS).modelDirectory, root);
+      } else {
+        assert.equal(state.settings.modelDirectory, DEFAULTS.modelDirectory);
+        assert.equal(state.llm.models[0].name, 'old.gguf');
+        assert.equal(h.store.get('settings', 'main'), undefined);
+        assert.equal(publications.length, 0);
+      }
+    } finally {
+      gate.resolve();
+      await runtime.stop();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });

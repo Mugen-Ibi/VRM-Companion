@@ -175,8 +175,11 @@ export class ModelRuntime {
     this.state = { ...this.state, ...value };
     this.changed();
   }
-  async refresh(directory: string) {
+  async refresh(directory: string, beforePublish?: (models: LocalModel[]) => void) {
     const models = await scanModels(directory);
+    // Commit the selected directory synchronously before exposing its catalogue.
+    // Cancellation or a failed settings write must leave the previous list intact.
+    beforePublish?.(models);
     this.update({ models });
     return models;
   }
