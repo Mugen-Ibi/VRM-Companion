@@ -1,6 +1,6 @@
 import { _electron as electron } from 'playwright';
 import { panelWindow } from './electron-test.mjs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
@@ -36,11 +36,17 @@ async function waitState(predicate, timeout = 200000) {
   throw new Error('State timeout: ' + JSON.stringify((await state()).llm));
 }
 async function choose(method, file) {
-  await application.evaluate(({ dialog }, selected) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] });
-    dialog.showMessageBox = async () => ({ response: 0 });
-  }, file);
+  await application.evaluate(
+    ({ dialog }, { selected, consent }) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] });
+      // Only this explicitly selected test executable receives execution consent.
+      dialog.showMessageBox = async () => ({ response: consent ? 1 : 0 });
+    },
+    { selected: file, consent: method === 'chooseLlamaServer' },
+  );
   await panel.evaluate((name) => window.companion[name](), method);
+  if (method === 'chooseLlamaServer')
+    assert.equal((await state()).settings.serverPath, await realpath(file));
 }
 async function capture(name) {
   const data = await application.evaluate(async ({ BrowserWindow }) => {

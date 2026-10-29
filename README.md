@@ -37,6 +37,8 @@ MVPの実装とWindows向けパッケージを作成しました。検証結果�
 
 通常の接続先は `http://127.0.0.1:8080` です。既存の起動設定を引き継ぎ、context 16384・GPU layers 99・並列1を初期値にしています。アプリ側のコンテキスト設定はサーバー以下にしてください。GPUメモリ8GBでは9Bモデル2つを同時にGPUへ載せる余裕がありません。起動スクリプトは使用中ポートを検出し、停止スクリプトは記録したプロセスだけを停止します。
 
+保守内容とプラットフォーム別の検証範囲は [2026-10-29保守レビュー](docs/maintenance-2026-10-29.md) を参照してください。
+
 ## ソースから実行
 
 Windows x64、Node.js 24以降、Windowsの.NET Framework 4.xコンパイラを使います。Electron/TypeScript/Three.js構成で、Unityはビルドにも不要です。
@@ -50,16 +52,14 @@ npm.cmd run dev
 `npm` が古いユーザーフォルダのshimを参照する場合は、`& 'C:\Program Files\nodejs\npm.cmd' ci` のようにNode.js付属の実体を指定してください。`setup` はElectronの取得です。アプリ起動時の自動ダウンロードはありません。
 
 ```powershell
-npm.cmd run typecheck
-npm.cmd test
-npm.cmd run build
+npm.cmd run check
 npm.cmd run test:ui
 npm.cmd run package
 ```
 
 `package` は最新ソースのビルドと依存ライセンス生成も行います。公開用パッケージにはWindowsコード署名設定が必須です。署名証明書のないローカル検証だけは `COMPANION_ALLOW_UNSIGNED=1` で明示的に許可できます。UI試験は自作VRM・模擬サーバー・使い捨てファイルで行い、個人データを整理しません。ファイル試験はWindows NTFSが必要です。UI試験の整理対象はアプリ自身の保護範囲を避け、隣の `VRM-Companion-test-artifacts` に作ります。
 
-公開名・Gitタグ・Windows実行ファイルのバージョンは `package.json` の `releaseVersion`（現在 `0.0.0.3`）を使います。npm向けの `version` はSemVer形式の `0.0.3-beta.0` です。`COMPANION_PACKAGE_OUT` で出力先を指定でき、今回の配布用ビルドは `release/v0.0.0.5` に出力します。
+公開名・Gitタグ・Windows実行ファイルのバージョンは `package.json` の `releaseVersion`（現在 `0.0.0.5`）を使います。npm向けの `version` はSemVer形式の `0.0.5-beta.0` です。`COMPANION_PACKAGE_OUT` で出力先を指定でき、今回の配布用ビルドは `release/v0.0.0.5` に出力します。
 
 v0.0.0.5では設定保存の競合を修正し、通知を差分化しました。バックアップ・履歴削除のバックアップ処理・VRM検査はworkerで実行します。履歴は自動削除しません。詳細は [リリースノート](docs/release-v0.0.0.5.md) を参照してください。
 

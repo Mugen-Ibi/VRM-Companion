@@ -17,7 +17,7 @@ await createFixtures(path.join(directory, 'synthetic'));
 const original = await readFile(sample),
   hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 let json, bin;
-for (let offset = 12; offset + 8 <= original.length; ) {
+for (let offset = 12; offset + 8 <= original.length;) {
   const length = original.readUInt32LE(offset),
     kind = original.readUInt32LE(offset + 4);
   offset += 8;

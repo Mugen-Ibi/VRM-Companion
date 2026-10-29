@@ -261,62 +261,68 @@ test('undo reads neither oversized nor metadata-changed files and reports reject
   assert.deepEqual(growth.native.reads, []);
 });
 
-test('real native stat reads metadata only and inspect/move enforce reserved size before hashing', async () => {
-  const base = path.resolve('artifacts/recovery-budget-tests');
-  await fs.mkdir(base, { recursive: true });
-  const directory = await fs.mkdtemp(path.join(base, 'case-'));
-  try {
-    const native = new NativeFiles(path.resolve('native/windows-files/bin/CompanionFiles.exe'));
-    const root = await native.run<{ identity: string }>({ command: 'root', root: directory });
-    const payload = Buffer.alloc(8 * 1024 * 1024, 0x5a),
-      file = path.join(directory, 'a.txt');
-    await fs.writeFile(file, payload);
-    const request = { root: directory, rootIdentity: root.identity, from: 'a.txt' };
-    let progress = 0;
-    const stat = await native.run<Identity>({ ...request, command: 'stat' }, undefined, () => {
-      progress++;
-    });
-    assert.equal(stat.size, payload.length);
-    assert.ok(!stat.hash);
-    assert.equal(progress, 0);
-    await fs.appendFile(file, '!');
-    await assert.rejects(
-      () =>
-        native.run({ ...request, command: 'inspect', maxBytes: stat.size }, undefined, () => {
-          progress++;
-        }),
-      /読取り予算/,
-    );
-    assert.equal(progress, 0);
-    await fs.mkdir(path.join(directory, '文書'));
-    await assert.rejects(
-      () =>
-        native.run(
-          {
-            ...request,
-            command: 'move',
-            to: '文書/a.txt',
-            maxBytes: stat.size,
-            expected: { ...stat, hash: createHash('sha256').update(payload).digest('hex') },
-          },
-          undefined,
-          () => {
+test(
+  'real native stat reads metadata only and inspect/move enforce reserved size before hashing',
+  { skip: process.platform !== 'win32' && 'Requires the Windows NTFS adapter' },
+  async () => {
+    const base = path.resolve('artifacts/recovery-budget-tests');
+    await fs.mkdir(base, { recursive: true });
+    const directory = await fs.mkdtemp(path.join(base, 'case-'));
+    try {
+      const native = new NativeFiles(path.resolve('native/windows-files/bin/CompanionFiles.exe'));
+      const root = await native.run<{ identity: string }>({ command: 'root', root: directory });
+      const payload = Buffer.alloc(8 * 1024 * 1024, 0x5a),
+        file = path.join(directory, 'a.txt');
+      await fs.writeFile(file, payload);
+      const request = { root: directory, rootIdentity: root.identity, from: 'a.txt' };
+      let progress = 0;
+      const stat = await native.run<Identity>({ ...request, command: 'stat' }, undefined, () => {
+        progress++;
+      });
+      assert.equal(stat.size, payload.length);
+      assert.ok(!stat.hash);
+      assert.equal(progress, 0);
+      await fs.appendFile(file, '!');
+      await assert.rejects(
+        () =>
+          native.run({ ...request, command: 'inspect', maxBytes: stat.size }, undefined, () => {
             progress++;
-          },
-        ),
-      /読取り予算/,
-    );
-    assert.equal(progress, 0);
-    await assert.rejects(() => fs.lstat(path.join(directory, '文書', 'a.txt')), { code: 'ENOENT' });
-    const inspected = await native.run<Identity>({
-      ...request,
-      command: 'inspect',
-      maxBytes: stat.size + 1,
-    });
-    assert.equal(inspected.hash, createHash('sha256').update(payload).update('!').digest('hex'));
-  } finally {
-    const absolute = path.resolve(directory);
-    assert.ok(absolute.startsWith(base + path.sep));
-    await fs.rm(absolute, { recursive: true, force: true });
-  }
-});
+          }),
+        /読取り予算/,
+      );
+      assert.equal(progress, 0);
+      await fs.mkdir(path.join(directory, '文書'));
+      await assert.rejects(
+        () =>
+          native.run(
+            {
+              ...request,
+              command: 'move',
+              to: '文書/a.txt',
+              maxBytes: stat.size,
+              expected: { ...stat, hash: createHash('sha256').update(payload).digest('hex') },
+            },
+            undefined,
+            () => {
+              progress++;
+            },
+          ),
+        /読取り予算/,
+      );
+      assert.equal(progress, 0);
+      await assert.rejects(() => fs.lstat(path.join(directory, '文書', 'a.txt')), {
+        code: 'ENOENT',
+      });
+      const inspected = await native.run<Identity>({
+        ...request,
+        command: 'inspect',
+        maxBytes: stat.size + 1,
+      });
+      assert.equal(inspected.hash, createHash('sha256').update(payload).update('!').digest('hex'));
+    } finally {
+      const absolute = path.resolve(directory);
+      assert.ok(absolute.startsWith(base + path.sep));
+      await fs.rm(absolute, { recursive: true, force: true });
+    }
+  },
+);

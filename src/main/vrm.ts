@@ -27,16 +27,24 @@ export function inspectVRM(
   while (offset + 8 <= bytes.length) {
     const size = bytes.readUInt32LE(offset),
       kind = bytes.readUInt32LE(offset + 4);
+    if (offset === 12 && kind !== 0x4e4f534a)
+      throw new Error('GLBの先頭はJSONチャンクである必要があります。');
     offset += 8;
     if (size % 4 !== 0 || offset + size > bytes.length) throw new Error('GLBチャンクが不正です。');
     if (kind === 0x4e4f534a) {
       if (json || size > 8 * 1024 ** 2) throw new Error('GLBメタデータが不正です。');
       json = JSON.parse(bytes.subarray(offset, offset + size).toString('utf8'));
+      if (!json || typeof json !== 'object' || Array.isArray(json))
+        throw new Error('GLBメタデータのルートが不正です。');
     }
-    if (kind === 0x004e4942) bin = bytes.subarray(offset, offset + size);
+    if (kind === 0x004e4942) {
+      if (bin !== undefined) throw new Error('GLBのBINチャンクが重複しています。');
+      bin = bytes.subarray(offset, offset + size);
+    }
     offset += size;
   }
-  if (offset !== bytes.length || !json) throw new Error('GLB構造が不正です。');
+  if (offset !== bytes.length || !json || typeof json !== 'object' || Array.isArray(json))
+    throw new Error('GLB構造が不正です。');
   for (const field of ['buffers', 'images', 'bufferViews', 'meshes', 'accessors', 'nodes'] as const)
     if (
       json[field] !== undefined &&
@@ -54,8 +62,10 @@ export function inspectVRM(
     throw new Error('外部参照やURI画像を含むVRMは未対応です。画像埋め込みで書き出してください。');
   if ((json.nodes?.length ?? 0) > 10000) throw new Error('ノード数が上限を超えています。');
   let triangles = 0;
+  const meshTriangles: number[] = [];
   for (const mesh of json.meshes ?? []) {
     if (!Array.isArray(mesh.primitives)) throw new Error('メッシュ構造が不正です。');
+    let count = 0;
     for (const primitive of mesh.primitives) {
       if (!primitive || typeof primitive !== 'object') throw new Error('メッシュ構造が不正です。');
       if (primitive.extensions?.KHR_draco_mesh_compression)
@@ -72,28 +82,52 @@ export function inspectVRM(
       )
         throw new Error('メッシュの参照・描画形式が不正です。');
       const n = json.accessors[index].count;
-      triangles += mode === 4 ? Math.ceil(n / 3) : n;
+      const primitives = mode === 4 ? Math.ceil(n / 3) : n;
+      triangles += primitives;
+      count += primitives;
       if (triangles > 200000) throw new Error('三角形数20万の上限を超えています。');
     }
+    meshTriangles.push(count);
   }
-  if (triangles > 200000) throw new Error('三角形数20万の上限を超えています。');
+  // Each mesh already counts once (including unused meshes). Repeated node
+  // references create additional rendered instances and must consume the budget.
+  const instances = new Set<number>();
+  for (const node of json.nodes ?? []) {
+    if (node.mesh === undefined) continue;
+    if (!Number.isSafeInteger(node.mesh) || node.mesh < 0 || node.mesh >= meshTriangles.length)
+      throw new Error('ノードのメッシュ参照が不正です。');
+    if (instances.has(node.mesh)) triangles += meshTriangles[node.mesh];
+    else instances.add(node.mesh);
+    if (triangles > 200000) throw new Error('三角形数20万の上限を超えています。');
+  }
   let decoded = 0;
   for (const img of json.images ?? []) {
-    const view = json.bufferViews?.[img.bufferView];
+    const view =
+      Number.isSafeInteger(img.bufferView) && img.bufferView >= 0
+        ? json.bufferViews?.[img.bufferView]
+        : undefined;
     if (
       !bin ||
       !view ||
       view.buffer !== 0 ||
       !Number.isSafeInteger(view.byteLength) ||
       view.byteLength <= 0 ||
-      view.byteOffset < 0 ||
+      (view.byteOffset !== undefined &&
+        (!Number.isSafeInteger(view.byteOffset) || view.byteOffset < 0)) ||
       (view.byteOffset ?? 0) + view.byteLength > bin.length
     )
       throw new Error('画像データが不正です。');
     const size = dimensions(
       bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength),
     );
-    if (size.width <= 0 || size.height <= 0 || size.width > 4096 || size.height > 4096)
+    if (
+      !Number.isSafeInteger(size.width) ||
+      !Number.isSafeInteger(size.height) ||
+      size.width <= 0 ||
+      size.height <= 0 ||
+      size.width > 4096 ||
+      size.height > 4096
+    )
       throw new Error('画像は4096px以下の対応形式にしてください。');
     decoded += size.width * size.height * 4;
     if (decoded > 256 * 1024 ** 2) throw new Error('展開画像の合計256MiBを超えています。');

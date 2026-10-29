@@ -520,9 +520,12 @@ function registerAPI() {
       signal.throwIfAborted();
       const directory = await fs.realpath(result.filePaths[0]);
       await runtime!.stop();
+      signal.throwIfAborted();
       const models = await runtime!.refresh(directory);
-      settings = { ...settings, modelDirectory: directory, managedModel: models[0]?.id ?? '' };
-      store.put('settings', 'main', settings);
+      signal.throwIfAborted();
+      const next = { ...settings, modelDirectory: directory, managedModel: models[0]?.id ?? '' };
+      store.put('settings', 'main', next);
+      settings = next;
     });
   });
   handle('chooseLlamaServer', async () => {
@@ -538,21 +541,26 @@ function registerAPI() {
       if (path.basename(executable).toLowerCase() !== 'llama-server.exe')
         throw new Error('llama-server.exeを選択してください。');
       const trust = await inspectServerTrust(executable);
-      if (!trust.trusted) {
-        const confirmation = await dialog.showMessageBox(panel, {
-          type: 'warning',
-          title: '提供元を確認できない実行ファイル',
-          message: 'このllama-server.exeは公式取得記録と一致しません。',
-          detail: `SHA-256: ${trust.hash}\n\n実行すると、このアプリと同じWindowsユーザー権限でファイルや環境へアクセスできます。入手元を確認できる場合だけ許可してください。`,
-          buttons: ['キャンセル', '危険性を理解して使用'],
-          defaultId: 0,
-          cancelId: 0,
-        });
-        if (confirmation.response !== 1) return 'idle';
-      }
+      // Adjacent manifests are mutable local metadata, not publisher signatures.
+      // Always require an explicit choice before recording executable authority.
+      const confirmation = await dialog.showMessageBox(panel, {
+        type: 'warning',
+        title: '実行ファイルの使用を確認',
+        message: trust.trusted
+          ? 'このllama-server.exeはローカルの取得記録と一致します。提供元の署名を検証したものではありません。'
+          : 'このllama-server.exeはローカルの取得記録と一致しません。',
+        detail: `SHA-256: ${trust.hash}\n\n実行すると、このアプリと同じWindowsユーザー権限でファイルや環境へアクセスできます。取得記録も書き換え可能です。入手元を確認できる場合だけ許可してください。`,
+        buttons: ['キャンセル', '危険性を理解して使用'],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (confirmation.response !== 1) return 'idle';
+      signal.throwIfAborted();
       await runtime!.stop();
-      settings = { ...settings, serverPath: executable, serverHash: trust.hash };
-      store.put('settings', 'main', settings);
+      signal.throwIfAborted();
+      const next = { ...settings, serverPath: executable, serverHash: trust.hash };
+      store.put('settings', 'main', next);
+      settings = next;
     });
   });
   handle('refreshModels', () =>

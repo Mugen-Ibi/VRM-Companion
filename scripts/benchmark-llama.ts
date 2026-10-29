@@ -196,7 +196,7 @@ const manifest = {
   chatCases,
   conditions: [
     'Existing llama-server configuration and model are unchanged. Test requests run sequentially with a 300 ms pause between cases.',
-    'A separate two-hour endurance test requests a short response about once per minute. These are NOT exclusive server-speed measurements.',
+    'Concurrent server load and exclusive access are not measured by this script. These are NOT verified exclusive server-speed measurements.',
     'No warmup requests and no repeated best-of selection. The existing server may already have a warm model/prompt cache. Cases run in the order listed.',
     'Intent accuracy is exact equality of intent, method, and target for these 20 fixed synthetic cases; it is not a general language-quality estimate. Chat pass means normal-chat routing, successful nonempty response and no file-completion claim. Sentence-count conformance is recorded separately; factual accuracy and naturalness are not automatically graded.',
     'Chat total TTFT starts before Llama.intent and ends at the first nonempty body delta from Llama.chat; template/token counting, routing inference and queueing are included.',

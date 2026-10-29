@@ -19,7 +19,7 @@
 アプリからLLMを選ぶ場合は、次の順で設定します。
 
 1. 「設定」→LLMの使い方を「フォルダーから選択」にします。
-2. 「GGUFフォルダーを選択」でモデルの配置先、「llama-server.exeを選択」で展開済みのllama.cpp実行ファイルを指定します。管理スクリプトの既定配置は `%LOCALAPPDATA%\VRM-Companion-LLM\models` と `%LOCALAPPDATA%\VRM-Companion-LLM\llama\llama-server.exe` です。公式配布物として確認できない実行ファイルは、SHA-256を表示して明示確認を求めます。
+2. 「GGUFフォルダーを選択」でモデルの配置先、「llama-server.exeを選択」で展開済みのllama.cpp実行ファイルを指定します。管理スクリプトの既定配置は `%LOCALAPPDATA%\VRM-Companion-LLM\models` と `%LOCALAPPDATA%\VRM-Companion-LLM\llama\llama-server.exe` です。すべての実行ファイルについて、SHA-256と権限の危険性を表示して明示確認を求めます。ローカルの取得記録との一致は、提供元の署名検証ではありません。
 3. 「設定を保存」後、会話上部の一覧からモデルを選びます。選択時に読み込み、前のモデルは終了してから切り替えます。会話履歴は維持します。
 4. 「メモリ解放」でLLMを終了できます。未使用時の自動解放は既定5分、0分で無効です。次の送信時に選択済みモデルを読み直します。読み込み中も「停止」できます。
 

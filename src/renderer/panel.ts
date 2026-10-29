@@ -194,9 +194,9 @@ function render() {
   const form = document.querySelector<HTMLFormElement>('#settings-form');
   if (form) {
     form
-      .querySelectorAll<
-        HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
-      >('input,textarea,select')
+      .querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+        'input,textarea,select',
+      )
       .forEach((el) => {
         const saved = settingsDraft?.get(el.id || el.name);
         if (saved) {

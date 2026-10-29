@@ -5,7 +5,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import vm from 'node:vm';
-import ts from 'typescript';
+// TypeScript 7 provides the CLI; its legacy AST/transpile API remains in TypeScript 6.
+import ts from 'typescript-api';
 import { z } from 'zod';
 import { settingsSchema, mergeSettingsEdit } from '../src/main/settings';
 import { notifySafely } from '../src/main/notifications';
@@ -135,6 +136,7 @@ function mainHarness() {
     on: (name: string, callback: Function) => events.set(name, callback),
   };
   const fs = {
+    realpath: async (file: string) => file,
     stat: async () => ({ size: 8 }),
     readFile: async () => Buffer.from('fixture'),
     mkdir: async () => {},
@@ -209,6 +211,19 @@ function mainHarness() {
       senderFrame: avatarWindow.webContents.mainFrame,
     };
   return {
+    setServerSelection: (
+      trusted: boolean,
+      confirm: (details: any) => Promise<{ response: number }>,
+    ) => {
+      context.testMain.setRuntime({ stop: async () => {}, cancelIdle() {}, scheduleIdle() {} });
+      context.inspectServerTrust = async () => ({ hash: 'a'.repeat(64), trusted });
+      context.dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path.join(root, 'llama-server.exe')],
+      });
+      context.dialog.showMessageBox = async (_window: unknown, details: unknown) =>
+        confirm(details);
+    },
     setOrganizer: (value: unknown) => {
       (context as any).injected = value;
       vm.runInContext('organizer=injected', context);
@@ -507,4 +522,94 @@ for (const action of ['deleteConversation', 'clearHistory'])
     assert.equal((await h.invoke('state')).conversations[0].id, id);
     assert.ok(h.store.get('conversations', id));
     assert.equal(h.current().phase, 'canceled');
+  });
+
+test('an adjacent manifest cannot bypass explicit executable consent; cancel keeps settings unchanged', async () => {
+  for (const trusted of [false, true]) {
+    const h = mainHarness();
+    let prompts = 0;
+    h.setServerSelection(trusted, async (details) => {
+      prompts++;
+      assert.equal(details.defaultId, 0);
+      assert.equal(details.cancelId, 0);
+      assert.ok(details.detail.includes('a'.repeat(64)));
+      return { response: 0 };
+    });
+    await h.invoke('chooseLlamaServer');
+    assert.equal(prompts, 1, 'local manifests are mutable metadata, not publisher signatures');
+    assert.equal(h.store.get('settings', 'main'), undefined);
+  }
+});
+
+test('canceling while executable consent is open prevents settings persistence', async () => {
+  const h = mainHarness();
+  h.setServerSelection(true, async () => {
+    h.abort();
+    return { response: 1 };
+  });
+  await assert.rejects(h.invoke('chooseLlamaServer'));
+  assert.equal(h.store.get('settings', 'main'), undefined);
+});
+
+test('explicit executable consent persists its path and hash only after the model stops', async () => {
+  const h = mainHarness(),
+    gate = deferred();
+  h.setServerSelection(true, async () => ({ response: 1 }));
+  h.setRuntime({ stop: () => gate.promise, cancelIdle() {}, scheduleIdle() {} });
+  const pending = h.invoke('chooseLlamaServer');
+  await nextTurn();
+  assert.equal(h.store.get('settings', 'main'), undefined);
+  gate.resolve();
+  await pending;
+  const saved = h.store.get('settings', 'main') as typeof DEFAULTS;
+  assert.equal(path.basename(saved.serverPath), 'llama-server.exe');
+  assert.equal(saved.serverHash, 'a'.repeat(64));
+});
+
+test('canceling executable selection while the model stops does not persist authority', async () => {
+  const h = mainHarness(),
+    gate = deferred();
+  h.setServerSelection(true, async () => ({ response: 1 }));
+  h.setRuntime({ stop: () => gate.promise, cancelIdle() {}, scheduleIdle() {} });
+  const pending = h.invoke('chooseLlamaServer');
+  await nextTurn();
+  h.abort();
+  gate.resolve();
+  await assert.rejects(pending);
+  assert.equal(h.store.get('settings', 'main'), undefined);
+});
+
+test('failed executable selection writes do not change in-memory executable authority', async () => {
+  const h = mainHarness();
+  h.setServerSelection(true, async () => ({ response: 1 }));
+  h.store.put = () => {
+    throw new Error('injected settings write failure');
+  };
+  await assert.rejects(h.invoke('chooseLlamaServer'), /settings write failure/);
+  assert.equal((await h.invoke('state')).settings.serverPath, DEFAULTS.serverPath);
+  assert.equal((await h.invoke('state')).settings.serverHash, DEFAULTS.serverHash);
+});
+
+for (const stage of ['stop', 'refresh'])
+  test(`canceling model directory selection during ${stage} preserves its previous setting`, async () => {
+    const h = mainHarness(),
+      gate = deferred();
+    h.setRuntime({
+      stop: async () => {
+        if (stage === 'stop') await gate.promise;
+      },
+      refresh: async () => {
+        if (stage === 'refresh') await gate.promise;
+        return [{ id: 'a'.repeat(64) }];
+      },
+      cancelIdle() {},
+      scheduleIdle() {},
+    });
+    const pending = h.invoke('chooseModelDirectory');
+    await nextTurn();
+    h.abort();
+    gate.resolve();
+    await assert.rejects(pending);
+    assert.equal((await h.invoke('state')).settings.modelDirectory, DEFAULTS.modelDirectory);
+    assert.equal(h.store.get('settings', 'main'), undefined);
   });

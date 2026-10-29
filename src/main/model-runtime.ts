@@ -87,6 +87,8 @@ export async function fileSha256(file: string) {
   for await (const chunk of createReadStream(file)) hash.update(chunk);
   return hash.digest('hex');
 }
+// `trusted` means the hash matches a local installation record only. A caller must
+// not treat this unsigned manifest as proof of publisher identity or skip consent.
 export async function inspectServerTrust(executable: string) {
   const hash = await fileSha256(executable),
     manifestPath = path.resolve(path.dirname(executable), '..', 'manifest.json');

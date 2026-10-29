@@ -18,7 +18,7 @@
 
 APIの存在は [ElectronウィンドウAPI](https://www.electronjs.org/docs/latest/api/browser-window)、[TauriウィンドウAPI](https://v2.tauri.app/reference/javascript/api/namespacewindow/)、[UniVRM](https://vrm.dev/en/univrm/) を参照。上表の開発負担・優先順位は本プロジェクトに対する設計判断である。
 
-UIはTypeScriptによるDOM操作で実装し、Reactは使用していない。VRMの毎フレーム更新はパネルの状態更新から分離する。現在の組合せはElectron 44.4.3、Three.js 0.180.0、three-vrm 3.5.5で、実際の依存解決はpackage-lock.jsonに記録する。package.jsonのThree.js指定は`^0.180.0`であるため、更新時はlockfileと互換性試験を確認する。[three-vrm公式](https://github.com/pixiv/three-vrm)
+UIはTypeScriptによるDOM操作で実装し、Reactは使用していない。VRMの毎フレーム更新はパネルの状態更新から分離する。現在の組合せはElectron 44.10.0、Three.js 0.180.0、three-vrm 3.5.5で、実際の依存解決はpackage-lock.jsonに記録する。package.jsonのThree.js指定は`^0.180.0`であるため、更新時はlockfileと互換性試験を確認する。[three-vrm公式](https://github.com/pixiv/three-vrm)
 
 対象実機はWindows 11 x64、RAM 32GB、8GB級のNVIDIA GPUを搭載したノートPC。LLMとVRM描画でVRAMを共有するため、GGUFの容量だけでGPU使用量を判断しない。現アプリの既定はcontext 4096、応答上限512トークン、1同時生成、30fps。実測した空き容量を見てGPUオフロード量を調整する。これらは性能保証値ではなく、音声モデルを同時常駐させる場合は別途予算を見直す。
 

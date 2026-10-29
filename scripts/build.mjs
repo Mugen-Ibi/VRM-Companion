@@ -60,4 +60,9 @@ await build({
 });
 for (const name of ['index.html', 'avatar.html', 'styles.css'])
   await copyFile(`src/renderer/${name}`, `dist/renderer/${name}`);
-console.log('Built renderer, Electron host, and Windows file adapter.');
+console.log(
+  'Built renderer and Electron host.' +
+    (process.platform === 'win32'
+      ? ' Built Windows file adapter.'
+      : ' Windows file adapter was not built on this platform.'),
+);

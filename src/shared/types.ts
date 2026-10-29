@@ -9,14 +9,7 @@ export const CATEGORIES = [
 ] as const;
 export type Category = (typeof CATEGORIES)[number];
 export type Phase =
-  | 'idle'
-  | 'thinking'
-  | 'responding'
-  | 'working'
-  | 'success'
-  | 'error'
-  | 'canceled'
-  | 'attention';
+  'idle' | 'thinking' | 'responding' | 'working' | 'success' | 'error' | 'canceled' | 'attention';
 export interface Settings {
   llmMode: 'external' | 'managed';
   modelDirectory: string;
