@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { inspectVRM } from '../src/main/vrm';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import type { InstancedMesh } from 'three';
 
 function fixture(overrides: Record<string, unknown> = {}) {
   const metadata = {
@@ -108,6 +110,138 @@ test('VRM triangle budget includes repeated node instances of the same mesh', ()
   // Preserve the previous conservative budget for unused meshes, too.
   assert.throws(
     () => inspectVRM(fixture({ ...scene, meshes: [mesh, mesh, mesh], nodes: [] }), dimensions),
+    /三角形数/,
+  );
+});
+
+test('VRM triangle budget includes GPU instance accessor counts and ordinary mesh references', () => {
+  const node = (countAccessor: number) => ({
+    mesh: 0,
+    extensions: { EXT_mesh_gpu_instancing: { attributes: { TRANSLATION: countAccessor } } },
+  });
+  const scene = {
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    accessors: [{ count: 9 }, { count: 66666 }, { count: 66667 }],
+  };
+  assert.equal(inspectVRM(fixture({ ...scene, nodes: [node(1)] }), dimensions).version, '1');
+  assert.throws(() => inspectVRM(fixture({ ...scene, nodes: [node(2)] }), dimensions), /三角形数/);
+  assert.throws(
+    () => inspectVRM(fixture({ ...scene, nodes: [node(1), { mesh: 0 }] }), dimensions),
+    /三角形数/,
+  );
+  assert.throws(
+    () => inspectVRM(fixture({ ...scene, nodes: [{ mesh: 0 }, node(1)] }), dimensions),
+    /三角形数/,
+  );
+  assert.equal(
+    inspectVRM(
+      fixture({
+        ...scene,
+        accessors: [{ count: 6 }, { count: 100000 }],
+        nodes: [node(1)],
+      }),
+      dimensions,
+    ).version,
+    '1',
+  );
+});
+
+test('VRM GPU instance attributes require valid equally sized bounded accessor references', () => {
+  const scene = {
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    accessors: [{ count: 3 }, { count: 2 }, { count: 3 }, { count: 0 }, { count: 200001 }],
+  };
+  for (const attributes of [
+    null,
+    [],
+    {},
+    { TRANSLATION: -1 },
+    { TRANSLATION: 0.5 },
+    { TRANSLATION: '1' },
+    { TRANSLATION: null },
+    { TRANSLATION: 5 },
+    { TRANSLATION: 1, SCALE: 2 },
+    { TRANSLATION: 3 },
+    { TRANSLATION: 4 },
+  ])
+    assert.throws(
+      () =>
+        inspectVRM(
+          fixture({
+            ...scene,
+            nodes: [{ mesh: 0, extensions: { EXT_mesh_gpu_instancing: { attributes } } }],
+          }),
+          dimensions,
+        ),
+      /インスタンス/,
+      JSON.stringify(attributes),
+    );
+  assert.equal(
+    inspectVRM(
+      fixture({
+        ...scene,
+        nodes: [
+          {
+            mesh: 0,
+            extensions: {
+              EXT_mesh_gpu_instancing: { attributes: { TRANSLATION: 1, SCALE: 1, _ID: 1 } },
+            },
+          },
+        ],
+      }),
+      dimensions,
+    ).version,
+    '1',
+  );
+});
+
+test('VRM GPU instance budget agrees with the installed CPU-only Three.js loader', async () => {
+  const metadata = {
+    asset: { version: '2.0' },
+    buffers: undefined,
+    bufferViews: undefined,
+    images: undefined,
+    extensionsUsed: ['EXT_mesh_gpu_instancing'],
+    accessors: [
+      { componentType: 5126, count: 6, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] },
+      { componentType: 5126, count: 100000, type: 'VEC3' },
+    ],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    nodes: [
+      { mesh: 0, extensions: { EXT_mesh_gpu_instancing: { attributes: { TRANSLATION: 1 } } } },
+    ],
+    scenes: [{ nodes: [0] }],
+    scene: 0,
+  };
+  const bytes = fixture(metadata);
+  assert.equal(inspectVRM(bytes, dimensions).version, '1');
+  const model = await new GLTFLoader().parseAsync(
+    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+    '',
+  );
+  let triangles = 0;
+  model.scene.traverse((object) => {
+    const mesh = object as InstancedMesh;
+    if (mesh.isInstancedMesh) {
+      triangles += (mesh.count * mesh.geometry.attributes.position.count) / 3;
+      mesh.geometry.dispose();
+      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material])
+        material.dispose();
+    }
+  });
+  assert.equal(triangles, 200000);
+  assert.throws(
+    () =>
+      inspectVRM(
+        fixture({
+          ...metadata,
+          accessors: [
+            { ...metadata.accessors[0], count: 9 },
+            { ...metadata.accessors[1], count: 66667 },
+          ],
+        }),
+        dimensions,
+      ),
     /三角形数/,
   );
 });

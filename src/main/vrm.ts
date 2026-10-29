@@ -90,14 +90,43 @@ export function inspectVRM(
     meshTriangles.push(count);
   }
   // Each mesh already counts once (including unused meshes). Repeated node
-  // references create additional rendered instances and must consume the budget.
+  // references and EXT_mesh_gpu_instancing copies must consume the same budget.
   const instances = new Set<number>();
   for (const node of json.nodes ?? []) {
     if (node.mesh === undefined) continue;
     if (!Number.isSafeInteger(node.mesh) || node.mesh < 0 || node.mesh >= meshTriangles.length)
       throw new Error('ノードのメッシュ参照が不正です。');
-    if (instances.has(node.mesh)) triangles += meshTriangles[node.mesh];
-    else instances.add(node.mesh);
+    let copies = 1;
+    const instancing = node.extensions?.EXT_mesh_gpu_instancing;
+    if (instancing !== undefined) {
+      const attributes = instancing?.attributes;
+      if (
+        !attributes ||
+        typeof attributes !== 'object' ||
+        Array.isArray(attributes) ||
+        Object.keys(attributes).length === 0
+      )
+        throw new Error('GPUインスタンス属性が不正です。');
+      let instanceCount: number | undefined;
+      for (const index of Object.values(attributes)) {
+        if (
+          typeof index !== 'number' ||
+          !Number.isSafeInteger(index) ||
+          index < 0 ||
+          !json.accessors?.[index]
+        )
+          throw new Error('GPUインスタンスのアクセサー参照が不正です。');
+        const count = json.accessors[index].count;
+        // Bound allocations even for empty geometry. All attributes must agree,
+        // as Three.js derives the instance count from the first accessor.
+        if (count < 1 || count > 200000 || (instanceCount !== undefined && count !== instanceCount))
+          throw new Error('GPUインスタンス数が不正、または上限を超えています。');
+        instanceCount = count;
+      }
+      copies = instanceCount!;
+    }
+    triangles += meshTriangles[node.mesh] * (instances.has(node.mesh) ? copies : copies - 1);
+    instances.add(node.mesh);
     if (triangles > 200000) throw new Error('三角形数20万の上限を超えています。');
   }
   let decoded = 0;
